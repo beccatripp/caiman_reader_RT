@@ -22,7 +22,8 @@ root.iconbitmap(os.path.join(initpath, "cmrd.ico"))
 
 ############################################################################################################
 def initialize_project():
-    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval
+    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root
+
     size_up = 1
     for rb in scrollable_buttons.winfo_children():
         rb.destroy()
@@ -39,6 +40,7 @@ def initialize_project():
             tif = tifs[0]
         else:
             tif = None
+
 
     active_vid = load_tiffstack(tif, size_up)
     h5 = h5py.File(h5_file, "r")
@@ -62,6 +64,9 @@ def initialize_project():
     tif2frame(active_vid, 0)
     set_scale(active_vid)
     new_cells(footprints, quality_check)
+    update_readout()
+    if not root.winfo_ismapped():
+        root.deiconify()
     welcome.destroy()
 
 
@@ -211,28 +216,29 @@ def update_overlay():
 
 def new_cells(footprints, quality_check):
     global scrollable_buttons
+    quality_color = {"A":"#198114", "R":"#443F9E", "F":"#ac0f0f", "":"#000000"}
     for cell in footprints:
         if quality_check[cell] == '':
-            tk.Radiobutton(scrollable_buttons, text=str(cell), variable=active_cell, font=font.Font(underline=True), foreground='red', value=cell, command=lambda: [update_mpl(), update_overlay()]).pack()
+            tk.Radiobutton(scrollable_buttons, text=str(cell), variable=active_cell, font=font.Font(underline=True), foreground=quality_color[quality_check[cell]], value=cell, command=lambda: [update_mpl(), update_overlay()]).pack()
         else:   
-            tk.Radiobutton(scrollable_buttons, text=str(cell), variable=active_cell, value=cell, command=lambda: [update_mpl(), update_overlay()]).pack()
+            tk.Radiobutton(scrollable_buttons, text=str(cell), variable=active_cell, value=cell, foreground=quality_color[quality_check[cell]], command=lambda: [update_mpl(), update_overlay()]).pack()
 
 def mousewheel(e):
     radiocanvas.yview_scroll(-1 * (e.delta // 120), "units")
 
 def update_qualdict():
     global quality, quality_check, save_status
-    if quality_check[int(active_cell.get())] == '':
-        review_confirmed(int(active_cell.get()))
+    review_confirmed(int(active_cell.get()))
     quality_check[int(active_cell.get())] = str(quality.get())
     update_readout()
     save_status.config(image=klaxon)
 
 def review_confirmed(uncheck):
-    global scrollable_buttons
+    global scrollable_buttons, quality
+    quality_color = {"A":"#198114", "R":"#443F9E", "F":"#ac0f0f", "":"#000000"}
     for rb in scrollable_buttons.winfo_children():
         if isinstance(rb, tk.Radiobutton) and (int(rb.cget("value")) == uncheck):
-            rb.config(font=font.Font())
+            rb.config(font=font.Font(), foreground=quality_color[quality.get()])
 
 
 
@@ -293,35 +299,21 @@ def mpl_scan(i):
 
 
 def update_readout():
-    global active_cell, quality, readout
+    global active_cell, quality, readout, quality_check
     qkey = {"A":"Accepted", "R": "Rejected", "F":"Flagged", '':"Unreviewed"}
-    rout = f"""Cell ID: {active_cell.get()}\n
-        Quality label: {qkey[quality.get()]}\n
-        SNR: {round(snr[active_cell.get()], 3)}\n
-        Spatial Correlation: {round(rval[active_cell.get()], 3)}
-    """
+    overall_status = [*quality_check.values()]
+
+    rout = f"""Cell ID: {active_cell.get()}
+Quality label: {qkey[quality.get()]}
+SNR: {round(snr[active_cell.get()], 3)}
+Spatial Correlation: {round(rval[active_cell.get()], 3)}
+Number of Cells:
+Total: {len(overall_status)} Accepted: {overall_status.count("A")} Rejected: {overall_status.count("R")} 
+Flagged: {overall_status.count("F")} Unreviewed: {overall_status.count("")}
+"""
     readout.config(text=rout)
 
 
-
-
-
-####################################################################################
-
-welcome = tk.Toplevel(root)
-welcome.title("Welcome to CaImAn Reader")
-
-logo = Image.open(os.path.join(initpath, "logo.png")).resize((50,50))
-logo_rs = ImageTk.PhotoImage(logo)
-welcome_note = tk.Label(welcome, text="Welcome to CaImAn Reader!  \nChoose a sterotyped project folder (includes CaImAn outputs and tiff files) to begin")
-file_b = tk.Button(welcome, text="Browse Files", command=initialize_project)
-
-show_logo = tk.Label(welcome, image=logo_rs)
-show_logo.pack()
-welcome_note.pack()
-file_b.pack()
-
-####################################################################################
 # icons
 klaxon = ImageTk.PhotoImage(Image.open(os.path.join(initpath, "icons/klaxon.png")).resize((15,15)))
 right_arr = ImageTk.PhotoImage(Image.open(os.path.join(initpath, "icons/right_arrow.png")).resize((15,15)))
@@ -350,10 +342,12 @@ mpl_frame = tk.Frame(root)
 radiocanvas = tk.Canvas(radioframe, height=220, width=80)
 
 #Eval buttons:
+
+
 quality = tk.StringVar()
-accept = tk.Radiobutton(eval_frame, text="Accept", variable=quality, value="A", command=update_qualdict)
-reject = tk.Radiobutton(eval_frame, text="Reject", variable=quality, value="R", command=update_qualdict)
-flg_ = tk.Radiobutton(eval_frame, text="Flag", variable=quality, value="F", command=update_qualdict)
+accept = tk.Radiobutton(eval_frame, text="Accept", variable=quality, value="A", foreground="#198114", command=update_qualdict)
+reject = tk.Radiobutton(eval_frame, text="Reject", variable=quality, value="R", foreground="#443F9E", command=update_qualdict)
+flg_ = tk.Radiobutton(eval_frame, text="Flag", variable=quality, value="F", foreground="#ac0f0f", command=update_qualdict)
 
 prvs = tk.Button(eval_frame, image=left_arr, command=previous_cell)
 nxt = tk.Button(eval_frame, image=right_arr, command=next_cell)
@@ -387,7 +381,7 @@ mpl_canvas.get_tk_widget().pack()
 ##########################################################
 
 
-readout = tk.Label(root, anchor="nw")
+readout = tk.Label(root, anchor="e", justify="left")
 tifviz = tk.Canvas(viz, width=1, height=1)
 tifviz.grid(row=1, columnspan=2)
 frame_scroll = tk.Scale(viz, from_=0, to=1, orient="horizontal", command=scale_img)
@@ -396,7 +390,7 @@ frame_scroll.grid(row=0, column=1)
 pp_button = tk.Button(viz, image=play, command=play_pause)
 scrollbar = ttk.Scrollbar(radioframe, orient="vertical", command=radiocanvas.yview)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-scrollable_buttons = tk.Frame(radiocanvas, height=220, width=80)
+scrollable_buttons = tk.Frame(radiocanvas, height=380, width=80)
 subwindow = radiocanvas.create_window((0,0), window=scrollable_buttons, anchor="nw")
 radiocanvas.configure(yscrollcommand=scrollbar.set)
 scrollable_buttons.bind("<Configure>", lambda e: radiocanvas.configure(scrollregion=radiocanvas.bbox("all")))
@@ -405,8 +399,6 @@ radiocanvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 radiocanvas.bind_all("<MouseWheel>", mousewheel)
 
 pp_button.grid(row=0, column=0)
-
-
 
 
 #Frame organization
@@ -420,7 +412,25 @@ projb_frame.grid(row=2, column=1)
 
 active_cell = tk.IntVar()
 folder = tk.StringVar(value="No Folder selected")
-#folder_txt = tk.Label(root, textvariable=folder).pack()
+root.withdraw()
+
+
+####################################################################################
+
+welcome = tk.Toplevel(root)
+welcome.title("Welcome to CaImAn Reader")
+
+logo = Image.open(os.path.join(initpath, "logo.png")).resize((50,50))
+logo_rs = ImageTk.PhotoImage(logo)
+welcome_note = tk.Label(welcome, text="Welcome to CaImAn Reader!  \nChoose a sterotyped project folder (includes CaImAn outputs and tiff files) to begin")
+file_b = tk.Button(welcome, text="Browse Files", command=initialize_project)
+
+show_logo = tk.Label(welcome, image=logo_rs)
+show_logo.pack()
+welcome_note.pack()
+file_b.pack()
+
+####################################################################################
 
 root.mainloop()
 
