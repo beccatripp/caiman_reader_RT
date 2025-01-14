@@ -18,15 +18,17 @@ import csv
 initpath = os.path.dirname(os.path.abspath(__file__))
 root = tk.Tk()
 root.title("CaImAn Reader")
-root.iconbitmap(os.path.join(initpath, "cmrd.ico"))
 
+ico_im = Image.open(os.path.join(initpath, "cmrd.ico"))
+root.wm_iconphoto(True, ImageTk.PhotoImage(ico_im))
 ############################################################################################################
 def initialize_project():
     global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root
 
-    size_up = 1
+    size_up = 2
     for rb in scrollable_buttons.winfo_children():
         rb.destroy()
+
 
     fold = filedialog.askdirectory(initialdir=initpath, title="Select Folder") 
     if fold:
@@ -166,42 +168,19 @@ def generate_footprints(h5, scale=1):
         bounds = []
         onefeet= skimage.transform.rescale(onefeet, scale, anti_aliasing=True) 
         pxlft = np.argwhere(onefeet!=0)
-
-        min_x = pxlft[:, 0].min()
-        min_y = pxlft[:, 1].min()
-        max_x = pxlft[:, 0].max()
-        max_y = pxlft[:, 1].max()
-
-        if (max_y - min_y) <= (max_x - min_x):
-            [bounds.append(i) for i in pxlft[pxlft[:,1]==max_y]]
-            [bounds.append(i) for i in pxlft[pxlft[:,1]==min_y]]
-            for i in range(min_y, max_y):
-                pxl_min = pxlft[pxlft[:,1]==i][:,0].min()
-                pxl_max = pxlft[pxlft[:,1]==i][:,0].max()
-                bounds.append([pxl_min, i])
-                bounds.append([pxl_max, i])
-
-                
-        else: 
-            [bounds.append(i) for i in pxlft[pxlft[:,0]==max_x]]
-            [bounds.append(i) for i in pxlft[pxlft[:,0]==min_x]]
-            for i in range(min_x, max_x):
-                pxl_min = pxlft[pxlft[:,0]==i][:,0].min()
-                pxl_max = pxlft[pxlft[:,0]==i][:,0].max()
-                bounds.append([i, pxl_min])
-                bounds.append([i, pxl_max])
-
-        bounds = np.asarray(bounds)
+        bounds = np.asarray(pxlft)
         hull = ConvexHull(bounds)
-        if len(bounds[hull.vertices]) <= 5:
-            print(cells[j], bounds)
-
         img_bounds[cells[j]] = bounds[hull.vertices]
         
     
-    img_bounds = {k:[ j for i in v for j in reversed(i.tolist())] for k, v in img_bounds.items() if v != []}
+    flat_bounds = {}
+    for k, v in img_bounds.items():
+        if len(v) > 0:
+            flat_bounds[k] = [j for i in v for j in reversed(i.tolist())]
+        else:
+            print(k, v)
     
-    return img_bounds, traces
+    return flat_bounds, traces
 
 
 
@@ -219,9 +198,9 @@ def new_cells(footprints, quality_check):
     quality_color = {"A":"#198114", "R":"#443F9E", "F":"#ac0f0f", "":"#000000"}
     for cell in footprints:
         if quality_check[cell] == '':
-            tk.Radiobutton(scrollable_buttons, text=str(cell), variable=active_cell, font=font.Font(underline=True), foreground=quality_color[quality_check[cell]], value=cell, command=lambda: [update_mpl(), update_overlay()]).pack()
+            tk.Radiobutton(scrollable_buttons, text=str(cell), variable=active_cell, font=font.Font(underline=True, size=16), foreground=quality_color[quality_check[cell]], value=cell, command=lambda: [update_mpl(), update_overlay()]).pack()
         else:   
-            tk.Radiobutton(scrollable_buttons, text=str(cell), variable=active_cell, value=cell, foreground=quality_color[quality_check[cell]], command=lambda: [update_mpl(), update_overlay()]).pack()
+            tk.Radiobutton(scrollable_buttons, text=str(cell), variable=active_cell, font=font.Font(size=16), value=cell, foreground=quality_color[quality_check[cell]], command=lambda: [update_mpl(), update_overlay()]).pack()
 
 def mousewheel(e):
     radiocanvas.yview_scroll(-1 * (e.delta // 120), "units")
@@ -238,7 +217,7 @@ def review_confirmed(uncheck):
     quality_color = {"A":"#198114", "R":"#443F9E", "F":"#ac0f0f", "":"#000000"}
     for rb in scrollable_buttons.winfo_children():
         if isinstance(rb, tk.Radiobutton) and (int(rb.cget("value")) == uncheck):
-            rb.config(font=font.Font(), foreground=quality_color[quality.get()])
+            rb.config(font=font.Font(size=16), foreground=quality_color[quality.get()])
 
 
 
@@ -292,7 +271,7 @@ def update_mpl():
 def mpl_scan(i):
     global ax, vertical_line
     if vertical_line:
-        vertical_line.set_xdata(float(i))
+        vertical_line.set_xdata([float(i)])
     else:
         vertical_line = ax.axvline(x=float(i), color='r')
     mpl_canvas.draw()
@@ -390,7 +369,7 @@ frame_scroll.grid(row=0, column=1)
 pp_button = tk.Button(viz, image=play, command=play_pause)
 scrollbar = ttk.Scrollbar(radioframe, orient="vertical", command=radiocanvas.yview)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-scrollable_buttons = tk.Frame(radiocanvas, height=380, width=80)
+scrollable_buttons = tk.Frame(radiocanvas, height=600, width=80)
 subwindow = radiocanvas.create_window((0,0), window=scrollable_buttons, anchor="nw")
 radiocanvas.configure(yscrollcommand=scrollbar.set)
 scrollable_buttons.bind("<Configure>", lambda e: radiocanvas.configure(scrollregion=radiocanvas.bbox("all")))
