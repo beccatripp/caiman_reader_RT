@@ -36,7 +36,7 @@ def initialize_project():
         
     opfiles = [os.path.join(path,file) for path, _, files in os.walk(str(folder.get())) for file in files]
     if opfiles != []:
-        tifs = [f for f in opfiles if (f.endswith('.TIFF')) | (f.endswith('.tiff')) |(f.endswith('.tif'))]
+        tifs = [f for f in opfiles if (f.endswith('croptest.TIFF')) | (f.endswith('.tiff')) |(f.endswith('.tif'))]
         h5_file = [f for f in opfiles if (f.endswith('.hdf5'))][0]
         if len(tifs) >= 1:
             tif = tifs[0]
@@ -126,23 +126,6 @@ def update_slider():
             frame_scroll.set(next_frame)  
             root.after(20, update_slider)  
 
-def create_mask(h5_path):
-    h5 = h5py.File(h5_path, "r")
-    cells = [i for i in h5['estimates']["idx_components"]]
-    data = h5['estimates']['A']['data']
-    indices = h5['estimates']['A']['indices']
-    indptr = h5['estimates']['A']['indptr']
-    shape = h5['estimates']['A']['shape']
-    sparse_mtx = csc_matrix((data, indices, indptr), shape=shape)
-    feet = sparse_mtx.toarray()
-    feet = np.array([feet[:,i] for i in cells]).T
-    allfeet = [np.reshape(feet[:, i],  (h5['estimates']['dims'][1],  h5['estimates']['dims'][0])).T for i in range(feet.shape[1]-1)]
-    allfeet = np.sum(allfeet, axis=0)
-    return allfeet > 0
-
-def mask_tiff(active_vid, mask):
-    return [i * mask for i in active_vid]
-
 
 def generate_footprints(h5, scale=1):
     cells = [int(i) for i in h5['estimates']["idx_components"]]
@@ -185,11 +168,16 @@ def generate_footprints(h5, scale=1):
 
 
 def update_overlay():
-    global active_cell, tifviz, footprints, quality_check, quality
+    global active_cell, tifviz, footprints, quality_check, quality, hidecell, alla, allr, allf, allu
     cell = active_cell.get()
     ft_list = footprints[cell]
     tifviz.delete("overlay")
-    tifviz.create_polygon(ft_list, fill="", outline="red", tags="overlay") 
+    if not hidecell.get():
+        if not (alla.get() or allr.get() or allf.get() or allu.get()):
+            tifviz.create_polygon(ft_list, fill="", outline="red", tags="overlay")
+        else:
+            toggle_all()
+
     quality.set(quality_check[int(cell)]) 
 
 
@@ -292,6 +280,36 @@ Flagged: {overall_status.count("F")} Unreviewed: {overall_status.count("")}
 """
     readout.config(text=rout)
 
+def toggle_all():
+    global quality_check, alla, allr, allf, footprints, quality, active_cell
+    tifviz.delete("overlay")
+    disp_a = disp_r = disp_f = disp_u = []
+    if alla.get():
+        disp_a = [c for c, r in quality_check.items() if r=="A"]
+    if allr.get():
+        disp_r = [c for c, r in quality_check.items() if r=="R"]
+    if allf.get():
+        disp_f = [c for c, r in quality_check.items() if r=="F"]
+    if allu.get():
+        disp_u = [c for c, r in quality_check.items() if r==""]    
+    disps = disp_a + disp_r + disp_f + disp_u 
+    for i in disps:
+        ft = footprints[i]
+        tifviz.create_polygon(ft, fill="", outline="red", tags="overlay")
+    if not (alla.get() or allr.get() or allf.get() or allu.get()):
+        tifviz.create_polygon(footprints[active_cell.get()], fill="", outline="red", tags="overlay")
+
+def single_switch():
+    global active_cell, footprints
+    if hidecell.get():
+        tifviz.delete("overlay")
+    else:
+        if (alla.get() or allr.get() or allf.get() or allu.get()):
+            toggle_all()
+        else:    
+            tifviz.create_polygon(footprints[active_cell.get()], fill="", outline="red", tags="overlay") 
+
+
 
 # icons
 klaxon = ImageTk.PhotoImage(Image.open(os.path.join(initpath, "icons/klaxon.png")).resize((15,15)))
@@ -319,6 +337,7 @@ eval_frame = tk.Frame(root)
 projb_frame = tk.Frame(root)
 mpl_frame = tk.Frame(root)
 radiocanvas = tk.Canvas(radioframe, height=220, width=80)
+readoutfr = tk.Frame(root)
 
 #Eval buttons:
 
@@ -331,11 +350,11 @@ flg_ = tk.Radiobutton(eval_frame, text="Flag", variable=quality, value="F", fore
 prvs = tk.Button(eval_frame, image=left_arr, command=previous_cell)
 nxt = tk.Button(eval_frame, image=right_arr, command=next_cell)
 
-accept.grid(row=0, column=0)
-reject.grid(row=0, column=1)
-flg_.grid(row=0, column=2)
-prvs.grid(row=1, column=0)
-nxt.grid(row=1, column=2)
+accept.grid(row=1, column=0)
+reject.grid(row=1, column=1)
+flg_.grid(row=1, column=2)
+prvs.grid(row=2, column=0)
+nxt.grid(row=2, column=2)
 
 #Overall Project Buttons:
 save_button = tk.Button(projb_frame, text="Save Quality Values", command=save_project)
@@ -360,7 +379,7 @@ mpl_canvas.get_tk_widget().pack()
 ##########################################################
 
 
-readout = tk.Label(root, anchor="e", justify="left")
+readout = tk.Label(readoutfr, anchor="e", justify="left")
 tifviz = tk.Canvas(viz, width=1, height=1)
 tifviz.grid(row=1, columnspan=2)
 frame_scroll = tk.Scale(viz, from_=0, to=1, orient="horizontal", command=scale_img)
@@ -379,9 +398,61 @@ radiocanvas.bind_all("<MouseWheel>", mousewheel)
 
 pp_button.grid(row=0, column=0)
 
+###############################################################################
+# Draw from cr HOLD
+#Eval buttons:
+hidecell = tk.BooleanVar(value=False)
+quality = tk.StringVar()
+
+toggle_cellview = tk.Checkbutton(eval_frame, text="Toggle ROI view off", onvalue=True, offvalue=False, variable=hidecell, command=single_switch)
+toggle_cellview.grid(row=0, column=0, columnspan=2)
+
+accept = tk.Radiobutton(eval_frame, text="Accept", variable=quality, value="A", foreground="#198114", command=update_qualdict)
+reject = tk.Radiobutton(eval_frame, text="Reject", variable=quality, value="R", foreground="#443F9E", command=update_qualdict)
+flg_ = tk.Radiobutton(eval_frame, text="Flag", variable=quality, value="F", foreground="#ac0f0f", command=update_qualdict)
+
+prvs = tk.Button(eval_frame, image=left_arr, command=previous_cell)
+nxt = tk.Button(eval_frame, image=right_arr, command=next_cell)
+
+
+accept.grid(row=1, column=0)
+reject.grid(row=1, column=1)
+flg_.grid(row=1, column=2)
+prvs.grid(row=2, column=0)
+nxt.grid(row=2, column=2)
+
+#Overall Project Buttons:
+save_button = tk.Button(projb_frame, text="Save Quality Values", command=save_project)
+save_status = tk.Label(projb_frame, image=from_load)
+new_project = tk.Button(projb_frame, text="Analyze New Video", command=initialize_project)
+save_button.grid(row=0, column=0)
+save_status.grid(row=0, column=1)
+new_project.grid(row=0, column=2)
+
+
+# Toggle view all:
+alla = tk.BooleanVar()
+allr = tk.BooleanVar()
+allf = tk.BooleanVar()
+allu = tk.BooleanVar()
+
+readout.grid(row=0)
+allaccepted = tk.Checkbutton(readoutfr, text="Accepted ROIs", variable=alla, onvalue=True, offvalue=False, command=toggle_all)
+allrejected = tk.Checkbutton(readoutfr, text="Rejected ROIs", variable=allr, onvalue=True, offvalue=False, command=toggle_all)
+allflagged = tk.Checkbutton(readoutfr, text="Flagged ROIs", variable=allf, onvalue=True, offvalue=False, command=toggle_all)
+allunrev = tk.Checkbutton(readoutfr, text="Unreviewed ROIs", variable=allu, onvalue=True, offvalue=False, command=toggle_all)
+qlabel=tk.Label(readoutfr, text="Display all:").grid(row=1)
+allaccepted.grid(row=2)
+allrejected.grid(row=3)
+allflagged.grid(row=4)
+allunrev.grid(row=5)
+
+
+
+###############################################################################
 
 #Frame organization
-readout.grid(row=0, column=0)
+readoutfr.grid(row=0, column=0)
 mpl_frame.grid(row=0, column=1)
 radioframe.grid(row=1, column=0)
 viz.grid(row=1, column=1)
