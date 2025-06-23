@@ -14,6 +14,9 @@ from scipy.spatial import ConvexHull
 from tkinter import ttk
 from tkinter import font
 import csv
+import yaml
+import filters
+import joblib
 
 initpath = os.path.dirname(os.path.abspath(__file__))
 root = tk.Tk()
@@ -25,7 +28,7 @@ root.wm_iconphoto(True, ImageTk.PhotoImage(ico_im))
 def initialize_project():
     global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root
 
-    size_up = 2
+    
     for rb in scrollable_buttons.winfo_children():
         rb.destroy()
 
@@ -36,23 +39,40 @@ def initialize_project():
         
     opfiles = [os.path.join(path,file) for path, _, files in os.walk(str(folder.get())) for file in files]
     if opfiles != []:
-        tifs = [f for f in opfiles if (f.endswith('croptest.TIFF')) | (f.endswith('.tiff')) |(f.endswith('.tif'))]
+        tifs = [f for f in opfiles if (f.endswith('preprocessed.TIFF')) | (f.endswith('preprocessed.tiff')) |(f.endswith('preprocessed.tif'))]
         h5_file = [f for f in opfiles if (f.endswith('.hdf5'))][0]
+        #config_file = [f for f in opfiles if (f.endswith('config.yaml'))]
+        
         if len(tifs) >= 1:
             tif = tifs[0]
         else:
             tif = None
+        print(tif)
+        
+    size_up = 2
 
-
+    
     active_vid = load_tiffstack(tif, size_up)
     h5 = h5py.File(h5_file, "r")
-    footprints, traces = generate_footprints(h5, scale=size_up)
+    # best_rois = filters.ROISet(h5, rval_thresh=0.35).filter(threshold=0)
+    
+    roiset = filters.ROISet(h5)
+    roiset.prepass(rval_thresh=0.3)
+    roiset.binarize()
+    roiset.find_overlap()
+    best_rois = roiset.filter_high_overlap(corr_thresh=0.1, overlap=0.45)
+
+    
+    footprints, traces = generate_footprints(h5, scale=size_up, rois_to_use=best_rois)
     snr = list(h5["estimates"]["SNR_comp"])
     rval = list(h5["estimates"]["r_values"])
     update_mpl()
+    
     quality_csv = [f for f in opfiles if (f.endswith('quality.csv'))]
     if quality_csv == []:
-        quality_check = {int(k): '' for k in footprints.keys()}
+        print("NEW QUALITY CSV")
+
+        quality_check = {int(k): '' if int(k) in best_rois else "PR" for k in footprints.keys()}
     else:
         quality_check = {}
         with open(quality_csv[0], "r") as f:
@@ -61,23 +81,53 @@ def initialize_project():
                 k, v = pair
                 quality_check[int(k)] = v
 
-
+    
     active_cell.set(int(list(footprints.keys())[0]))
     tif2frame(active_vid, 0)
     set_scale(active_vid)
     new_cells(footprints, quality_check)
     update_readout()
+    h5.close()
     if not root.winfo_ismapped():
         root.deiconify()
     welcome.destroy()
 
 
-def load_tiffstack(path2tiff, size):
+def load_tiffstack(path2tiff, size_up):
+
+    def resize_bitcrunch(pc, xdim, ydim, frame_dtype):
+        resized = [skimage.transform.resize(i, 
+                                    (xdim, ydim),
+                                     anti_aliasing=True,
+                                     preserve_range=True).astype(frame_dtype) for i in pc]
+        
+        bitcrunch = [np.interp(resized[i], (resized[i].min(), resized[i].max()), (0,255)).astype(np.uint8) 
+        for i in range(len(resized))]
+        return bitcrunch
+        
     if path2tiff != None:
         with tifffile.TiffFile(path2tiff) as tiff:
-            pc = tiff.asarray() 
-        bitcrunch = [np.interp(pc[i], (pc[i].min(), pc[i].max()), (0,255)).astype(np.uint8) for i in range(pc.shape[0])]
-        return bitcrunch
+            pc = tiff.asarray(out="memmap")
+            
+        #test resize:
+        xdim = pc[0].shape[0]*size_up
+        ydim = pc[0].shape[1]*size_up
+        frame_dtype =  pc[0].dtype
+
+
+        numchunks = int(pc.shape[0]/20)
+        slices = list(range(0, pc.shape[0], numchunks))
+
+        refslice = []
+
+        for n in range(len(slices) - 1):
+            refslice.append([slices[n], slices[n+1]])
+        refslice.append([slices[-1], pc.shape[0]])
+
+        vidslices = joblib.Parallel(n_jobs=20)(joblib.delayed(resize_bitcrunch)(pc[i[0]:i[1]], xdim, ydim, frame_dtype) for i in refslice)
+
+    bitcrunch = np.concatenate(vidslices)
+    return bitcrunch
     
 
 def tif2frame(arrtiff, i):
@@ -127,8 +177,11 @@ def update_slider():
             root.after(20, update_slider)  
 
 
-def generate_footprints(h5, scale=1):
-    cells = [int(i) for i in h5['estimates']["idx_components"]]
+def generate_footprints(h5, scale=1, rois_to_use=None):
+    if rois_to_use is not None:
+        cells = [int(i) for i in rois_to_use]
+    else:    
+        cells = [int(i) for i in list(h5['estimates']["idx_components"])]
     data = h5['estimates']['A']['data']
     indices = h5['estimates']['A']['indices']
     indptr = h5['estimates']['A']['indptr']
@@ -136,8 +189,19 @@ def generate_footprints(h5, scale=1):
     y_dims = h5['estimates']['dims'][1]
     x_dims = h5['estimates']['dims'][0]
 
-    traces = np.array(h5['estimates']['C'])
+    C = np.array(h5['estimates']['C'])
+    YrA = np.array(h5['estimates']['YrA'])
+    F_dff = np.array(h5['estimates']['F_dff'])
+    raw_traces = np.zeros(C.shape)
+    
+    for i, j in enumerate(C):    
+        raw_traces[i,:] = np.add(YrA[i,:], j)
+    
+    traces = {k:[raw_traces[k], F_dff[k]] for k in range(0,len(C))}
+        
+    
 
+    
     sparse_mtx = csc_matrix((data, indices, indptr), shape=shape)
     feet = sparse_mtx.toarray()
 
@@ -161,7 +225,7 @@ def generate_footprints(h5, scale=1):
         if len(v) > 0:
             flat_bounds[k] = [j for i in v for j in reversed(i.tolist())]
         else:
-            print(k, v)
+            pass
     
     return flat_bounds, traces
 
@@ -247,9 +311,11 @@ def previous_cell():
 
 def update_mpl():
     global traces, ax, mpl_canvas, active_cell, frame_scroll, vertical_line
-    trace = traces[int(active_cell.get()),:]
+    raw_trace = traces[int(active_cell.get())][0]
+    fdf = traces[int(active_cell.get())][1]
     ax.cla()
-    ax.plot(trace)
+    ax.plot(raw_trace, alpha=0.5)
+    ax.plot(fdf, alpha=0.8)
     vertical_line = None
     mpl_scan(float(frame_scroll.get()))
     mpl_canvas.draw()
@@ -309,6 +375,21 @@ def single_switch():
         else:    
             tifviz.create_polygon(footprints[active_cell.get()], fill="", outline="red", tags="overlay") 
 
+def allinone():
+    global allaccepted, allrejected, allflagged, allunrev, allall
+    if allall.get():
+        allaccepted.select()
+        allflagged.select()
+        allunrev.select()
+        allrejected.select()
+        toggle_all()
+    else:
+        allaccepted.deselect()
+        allflagged.deselect()
+        allunrev.deselect()
+        allrejected.deselect()
+        toggle_all()
+        
 
 
 # icons
@@ -327,7 +408,7 @@ from_load = ImageTk.PhotoImage(Image.open(os.path.join(initpath, "icons/from_loa
 snr = []
 rval =[]
 vertical_line = None
-traces = []
+traces = {}
 footprints={}
 quality_check = {}
 playing=False
@@ -431,6 +512,7 @@ new_project.grid(row=0, column=2)
 
 
 # Toggle view all:
+allall = tk.BooleanVar()
 alla = tk.BooleanVar()
 allr = tk.BooleanVar()
 allf = tk.BooleanVar()
@@ -441,7 +523,8 @@ allaccepted = tk.Checkbutton(readoutfr, text="Accepted ROIs", variable=alla, onv
 allrejected = tk.Checkbutton(readoutfr, text="Rejected ROIs", variable=allr, onvalue=True, offvalue=False, command=toggle_all)
 allflagged = tk.Checkbutton(readoutfr, text="Flagged ROIs", variable=allf, onvalue=True, offvalue=False, command=toggle_all)
 allunrev = tk.Checkbutton(readoutfr, text="Unreviewed ROIs", variable=allu, onvalue=True, offvalue=False, command=toggle_all)
-qlabel=tk.Label(readoutfr, text="Display all:").grid(row=1)
+showall = tk.Checkbutton(readoutfr, text="Display all:", variable=allall, onvalue=True, offvalue=False, command=allinone)
+showall.grid(row=1)
 allaccepted.grid(row=2)
 allrejected.grid(row=3)
 allflagged.grid(row=4)
