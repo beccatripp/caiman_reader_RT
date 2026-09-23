@@ -16,7 +16,6 @@ from tkinter import ttk
 from tkinter import font
 import csv
 import sys
-import joblib
 import filters
 
 initpath = os.path.dirname(os.path.abspath(__file__))
@@ -146,49 +145,53 @@ def initialize_project():
     welcome.destroy()
 
 
-def load_tiffstack(path2tiff, size_up):
+class LazyMovie:
+    """Frames are read from the TIFF and resized/8-bit converted only when
+    shown, so memory use doesn't grow with recording length. Supports len()
+    and movie[i], which is all the viewer uses."""
 
-    def resize_bitcrunch(pc, xdim, ydim, frame_dtype):
-        # One frame at a time straight to uint8, so a worker never holds a
-        # float copy of its whole upscaled chunk
-        bitcrunch = np.empty((len(pc), xdim, ydim), dtype=np.uint8)
-        for n, i in enumerate(pc):
-            resized = skimage.transform.resize(i,
-                                    (xdim, ydim),
+    def __init__(self, path2tiff, size_up):
+        self._tiff = None
+        try:
+            # Uncompressed TIFFs: map the file, nothing is read until indexed
+            self._frames = tifffile.memmap(path2tiff, mode="r")
+            self._n = self._frames.shape[0] if self._frames.ndim == 3 else 1
+            if self._frames.ndim == 2:
+                self._frames = self._frames[np.newaxis]
+        except ValueError:
+            # Compressed TIFFs: decode one page at a time
+            self._tiff = tifffile.TiffFile(path2tiff)
+            self._frames = None
+            self._n = len(self._tiff.pages)
+        first = self._raw(0)
+        self.xdim = first.shape[0]*size_up
+        self.ydim = first.shape[1]*size_up
+        self.frame_dtype = first.dtype
+        self._cache = {}
+
+    def _raw(self, i):
+        if self._frames is not None:
+            return np.asarray(self._frames[i])
+        return self._tiff.pages[i].asarray()
+
+    def __len__(self):
+        return self._n
+
+    def __getitem__(self, i):
+        i = int(i)
+        if i not in self._cache:
+            if len(self._cache) >= 64:
+                self._cache.pop(next(iter(self._cache)))
+            resized = skimage.transform.resize(self._raw(i),
+                                    (self.xdim, self.ydim),
                                      anti_aliasing=True,
-                                     preserve_range=True).astype(frame_dtype)
-            bitcrunch[n] = np.interp(resized, (resized.min(), resized.max()), (0,255)).astype(np.uint8)
-        return bitcrunch
+                                     preserve_range=True).astype(self.frame_dtype)
+            self._cache[i] = np.interp(resized, (resized.min(), resized.max()), (0,255)).astype(np.uint8)
+        return self._cache[i]
 
-    try:
-        # Uncompressed TIFFs: map the file itself instead of copying it to a temp file
-        pc = tifffile.memmap(path2tiff, mode="r")
-    except ValueError:
-        with tifffile.TiffFile(path2tiff) as tiff:
-            pc = tiff.asarray(out="memmap")
 
-    #test resize:
-    xdim = pc[0].shape[0]*size_up
-    ydim = pc[0].shape[1]*size_up
-    frame_dtype =  pc[0].dtype
-
-    chunk = max(1, int(pc.shape[0]/20))
-    slices = list(range(0, pc.shape[0], chunk))
-
-    refslice = []
-
-    for n in range(len(slices) - 1):
-        refslice.append([slices[n], slices[n+1]])
-    refslice.append([slices[-1], pc.shape[0]])
-
-    # Fill one preallocated array as chunks finish (no list + concatenate copy),
-    # with one worker per CPU actually allocated to this session
-    n_jobs = min(20, len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1))
-    bitcrunch = np.empty((pc.shape[0], xdim, ydim), dtype=np.uint8)
-    vidslices = joblib.Parallel(n_jobs=n_jobs, return_as="generator")(joblib.delayed(resize_bitcrunch)(pc[i[0]:i[1]], xdim, ydim, frame_dtype) for i in refslice)
-    for i, vidslice in zip(refslice, vidslices):
-        bitcrunch[i[0]:i[1]] = vidslice
-    return bitcrunch
+def load_tiffstack(path2tiff, size_up):
+    return LazyMovie(path2tiff, size_up)
     
 
 def tif2frame(arrtiff, i):
