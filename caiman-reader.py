@@ -3,6 +3,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import tkinter as tk
 import tkinter.filedialog as filedialog
+import tkinter.messagebox as messagebox
 from PIL import Image, ImageTk
 import os
 import tifffile
@@ -14,80 +15,132 @@ from scipy.spatial import ConvexHull
 from tkinter import ttk
 from tkinter import font
 import csv
-import yaml
-import filters
+import sys
 import joblib
+import filters
 
 initpath = os.path.dirname(os.path.abspath(__file__))
+
+# python caiman-reader.py --overlap-filter  -> also apply filters.ROISet
+USE_OVERLAP_FILTER = "--overlap-filter" in sys.argv
+
+# Must match OLL_Processing/oll_caiman_segmentation.py so the dF/F shown here
+# is the same one saved to traces_dff.npy
+F0_PERCENTILE = 8.0
+F0_FLOOR = 1e-6
+
+h5_path = None
 root = tk.Tk()
 root.title("CaImAn Reader")
 
 ico_im = Image.open(os.path.join(initpath, "cmrd.ico"))
 root.wm_iconphoto(True, ImageTk.PhotoImage(ico_im))
 ############################################################################################################
+def find_movie(fold):
+    """Movie for a plane folder: a local *preprocessed.tif if present, otherwise
+    the input_tif recorded in the OLL pipeline's run_parameters.txt."""
+    for f in sorted(os.listdir(fold)):
+        if f.lower().endswith(('preprocessed.tif', 'preprocessed.tiff')):
+            return os.path.join(fold, f)
+    run_params = os.path.join(fold, "run_parameters.txt")
+    if os.path.exists(run_params):
+        with open(run_params, "r") as f:
+            for line in f:
+                key, _, value = line.partition("=")
+                if key.strip() == "input_tif":
+                    return value.strip()
+    return None
+
+
+def quality_csv_path(h5_file):
+    """results.hdf5 -> results_quality.csv in the same folder."""
+    return os.path.splitext(h5_file)[0] + "_quality.csv"
+
+
+def load_quality_metric(h5, fold, h5_key, npz_key, n_components):
+    """Per-component SNR / r-value. Falls back to the OLL pipeline's
+    quality_scores.npz when evaluate_components failed and CaImAn saved None."""
+    ds = h5["estimates"].get(h5_key)
+    if isinstance(ds, h5py.Dataset) and ds.ndim == 1:
+        return list(ds[()])
+    npz = os.path.join(fold, "quality_scores.npz")
+    if os.path.exists(npz):
+        return list(np.load(npz)[npz_key])
+    return [float("nan")] * n_components
+
+
 def initialize_project():
-    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root
+    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root, h5_path
 
-    
-    for rb in scrollable_buttons.winfo_children():
-        rb.destroy()
+    fold = filedialog.askdirectory(initialdir=initpath, title="Select Folder")
+    if not fold:
+        return
 
+    # Only look in the selected plane folder, not its subfolders
+    h5_files = sorted(os.path.join(fold, f) for f in os.listdir(fold) if f.endswith('.hdf5'))
+    if not h5_files:
+        messagebox.showerror("CaImAn Reader", f"No .hdf5 file found in:\n{fold}")
+        return
+    h5_file = h5_files[0]
 
-    fold = filedialog.askdirectory(initialdir=initpath, title="Select Folder") 
-    if fold:
-        folder.set(fold)
-        
-    opfiles = [os.path.join(path,file) for path, _, files in os.walk(str(folder.get())) for file in files]
-    if opfiles != []:
-        tifs = [f for f in opfiles if (f.endswith('preprocessed.TIFF')) | (f.endswith('preprocessed.tiff')) |(f.endswith('preprocessed.tif'))]
-        h5_file = [f for f in opfiles if (f.endswith('.hdf5'))][0]
-        #config_file = [f for f in opfiles if (f.endswith('config.yaml'))]
-        
-        if len(tifs) >= 1:
-            tif = tifs[0]
-        else:
-            tif = None
-        print(tif)
-        
+    tif = find_movie(fold)
+    if tif is None or not os.path.exists(tif):
+        messagebox.showerror("CaImAn Reader", f"Movie not found for:\n{fold}\n\nLooked for *preprocessed.tif and run_parameters.txt input_tif:\n{tif}")
+        return
+    print(tif)
+
     size_up = 2
 
-    
+    # Load into locals first so a failed load leaves the current project intact
+    with h5py.File(h5_file, "r") as h5:
+        n_components = h5['estimates']['C'].shape[0]
+        new_snr = load_quality_metric(h5, fold, "SNR_comp", "snr", n_components)
+        new_rval = load_quality_metric(h5, fold, "r_values", "rval", n_components)
+
+        # Default: review every component CaImAn accepted (estimates/idx_components).
+        # --overlap-filter additionally applies filters.ROISet (r-value prepass, then
+        # drops the weaker of overlapping, correlated ROI pairs)
+        rois_to_use = None
+        if USE_OVERLAP_FILTER:
+            roiset = filters.ROISet(h5, F_dff=load_dff(h5), snr=new_snr, rval=new_rval)
+            roiset.prepass(rval_thresh=0.3)
+            roiset.binarize()
+            roiset.find_overlap()
+            rois_to_use = roiset.filter_high_overlap(corr_thresh=0.1, overlap=0.45)
+            print(f"Overlap filter kept {len(rois_to_use)} of {len(roiset.good_idxs)} accepted components")
+
+        new_footprints, new_traces = generate_footprints(h5, scale=size_up, rois_to_use=rois_to_use)
+
+    if not new_footprints:
+        messagebox.showerror("CaImAn Reader", f"No components to review in:\n{fold}")
+        return
+
+    for rb in scrollable_buttons.winfo_children():
+        rb.destroy()
+    folder.set(fold)
+    h5_path = h5_file
+    footprints, traces, snr, rval = new_footprints, new_traces, new_snr, new_rval
     active_vid = load_tiffstack(tif, size_up)
-    h5 = h5py.File(h5_file, "r")
-    # best_rois = filters.ROISet(h5, rval_thresh=0.35).filter(threshold=0)
-    
-    roiset = filters.ROISet(h5)
-    roiset.prepass(rval_thresh=0.3)
-    roiset.binarize()
-    roiset.find_overlap()
-    best_rois = roiset.filter_high_overlap(corr_thresh=0.1, overlap=0.45)
 
-    
-    footprints, traces = generate_footprints(h5, scale=size_up, rois_to_use=best_rois)
-    snr = list(h5["estimates"]["SNR_comp"])
-    rval = list(h5["estimates"]["r_values"])
-    update_mpl()
-    
-    quality_csv = [f for f in opfiles if (f.endswith('quality.csv'))]
-    if quality_csv == []:
+    quality_check = {int(k): '' for k in footprints.keys()}
+    quality_csv = quality_csv_path(h5_file)
+    if not os.path.exists(quality_csv):
         print("NEW QUALITY CSV")
-
-        quality_check = {int(k): '' if int(k) in best_rois else "PR" for k in footprints.keys()}
     else:
-        quality_check = {}
-        with open(quality_csv[0], "r") as f:
+        with open(quality_csv, "r") as f:
             r = csv.reader(f)
             for pair in r:
                 k, v = pair
-                quality_check[int(k)] = v
+                if int(k) in quality_check:
+                    quality_check[int(k)] = v
 
-    
+
     active_cell.set(int(list(footprints.keys())[0]))
+    update_mpl()
     tif2frame(active_vid, 0)
     set_scale(active_vid)
     new_cells(footprints, quality_check)
     update_readout()
-    h5.close()
     if not root.winfo_ismapped():
         root.deiconify()
     welcome.destroy()
@@ -177,6 +230,19 @@ def update_slider():
             root.after(20, update_slider)  
 
 
+def load_dff(h5):
+    """estimates/F_dff if saved. CaImAn saves it as the string 'NoneType' unless
+    detrend_df_f() was run; in that case compute dF/F from C the same way the
+    OLL pipeline does."""
+    C = np.array(h5['estimates']['C'])
+    F_dff = h5['estimates'].get('F_dff')
+    if isinstance(F_dff, h5py.Dataset) and F_dff.shape == C.shape:
+        return np.array(F_dff)
+    F0 = np.nanpercentile(C, F0_PERCENTILE, axis=1, keepdims=True)
+    F0 = np.where(np.isfinite(F0) & (F0 > F0_FLOOR), F0, F0_FLOOR)
+    return (C - F0) / F0
+
+
 def generate_footprints(h5, scale=1, rois_to_use=None):
     if rois_to_use is not None:
         cells = [int(i) for i in rois_to_use]
@@ -191,14 +257,16 @@ def generate_footprints(h5, scale=1, rois_to_use=None):
 
     C = np.array(h5['estimates']['C'])
     YrA = np.array(h5['estimates']['YrA'])
-    F_dff = np.array(h5['estimates']['F_dff'])
+    F_dff = load_dff(h5)
     raw_traces = np.zeros(C.shape)
     
     for i, j in enumerate(C):    
         raw_traces[i,:] = np.add(YrA[i,:], j)
     
     traces = {k:[raw_traces[k], F_dff[k]] for k in range(0,len(C))}
-        
+    if not cells:
+        return {}, traces
+
     
 
     
@@ -208,7 +276,7 @@ def generate_footprints(h5, scale=1, rois_to_use=None):
     feet = np.array([feet[:,i] for i in cells]).T
     img_bounds = {int(cell): [] for cell in cells}
 
-    for j in range(feet.shape[1]-1):
+    for j in range(feet.shape[1]):
 
         onefeet = np.reshape(feet[:, j],  (y_dims,  x_dims)).T 
 
@@ -276,13 +344,9 @@ def review_confirmed(uncheck):
 
 def save_project():
     global quality_check, save_status
-    reop = [os.path.join(path,file) for path, _, files in os.walk(str(folder.get())) for file in files]
-    quality_csv = [f for f in reop if (f.endswith('quality.csv'))]
-    if quality_csv == []:
-        namex = [f for f in reop if (f.endswith('.hdf5'))][0]
-        name = ('_').join(namex.split("_")[:-1]) + "_quality.csv"
-    else:
-        name = quality_csv[0]
+    if h5_path is None:
+        return
+    name = quality_csv_path(h5_path)
     with open(name, "w", newline='') as f:
         w = csv.writer(f)
         for k, v in quality_check.items():
@@ -555,7 +619,7 @@ welcome.title("Welcome to CaImAn Reader")
 
 logo = Image.open(os.path.join(initpath, "logo.png")).resize((50,50))
 logo_rs = ImageTk.PhotoImage(logo)
-welcome_note = tk.Label(welcome, text="Welcome to CaImAn Reader!  \nChoose a sterotyped project folder (includes CaImAn outputs and tiff files) to begin")
+welcome_note = tk.Label(welcome, text="Welcome to CaImAn Reader!  \nChoose a plane folder (e.g. Segmentation_caImAn/<date>/<mouse>/plane0) to begin")
 file_b = tk.Button(welcome, text="Browse Files", command=initialize_project)
 
 show_logo = tk.Label(welcome, image=logo_rs)
