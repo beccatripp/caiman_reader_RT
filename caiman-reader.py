@@ -149,37 +149,45 @@ def initialize_project():
 def load_tiffstack(path2tiff, size_up):
 
     def resize_bitcrunch(pc, xdim, ydim, frame_dtype):
-        resized = [skimage.transform.resize(i, 
+        # One frame at a time straight to uint8, so a worker never holds a
+        # float copy of its whole upscaled chunk
+        bitcrunch = np.empty((len(pc), xdim, ydim), dtype=np.uint8)
+        for n, i in enumerate(pc):
+            resized = skimage.transform.resize(i,
                                     (xdim, ydim),
                                      anti_aliasing=True,
-                                     preserve_range=True).astype(frame_dtype) for i in pc]
-        
-        bitcrunch = [np.interp(resized[i], (resized[i].min(), resized[i].max()), (0,255)).astype(np.uint8) 
-        for i in range(len(resized))]
+                                     preserve_range=True).astype(frame_dtype)
+            bitcrunch[n] = np.interp(resized, (resized.min(), resized.max()), (0,255)).astype(np.uint8)
         return bitcrunch
-        
-    if path2tiff != None:
+
+    try:
+        # Uncompressed TIFFs: map the file itself instead of copying it to a temp file
+        pc = tifffile.memmap(path2tiff, mode="r")
+    except ValueError:
         with tifffile.TiffFile(path2tiff) as tiff:
             pc = tiff.asarray(out="memmap")
-            
-        #test resize:
-        xdim = pc[0].shape[0]*size_up
-        ydim = pc[0].shape[1]*size_up
-        frame_dtype =  pc[0].dtype
 
+    #test resize:
+    xdim = pc[0].shape[0]*size_up
+    ydim = pc[0].shape[1]*size_up
+    frame_dtype =  pc[0].dtype
 
-        numchunks = int(pc.shape[0]/20)
-        slices = list(range(0, pc.shape[0], numchunks))
+    chunk = max(1, int(pc.shape[0]/20))
+    slices = list(range(0, pc.shape[0], chunk))
 
-        refslice = []
+    refslice = []
 
-        for n in range(len(slices) - 1):
-            refslice.append([slices[n], slices[n+1]])
-        refslice.append([slices[-1], pc.shape[0]])
+    for n in range(len(slices) - 1):
+        refslice.append([slices[n], slices[n+1]])
+    refslice.append([slices[-1], pc.shape[0]])
 
-        vidslices = joblib.Parallel(n_jobs=20)(joblib.delayed(resize_bitcrunch)(pc[i[0]:i[1]], xdim, ydim, frame_dtype) for i in refslice)
-
-    bitcrunch = np.concatenate(vidslices)
+    # Fill one preallocated array as chunks finish (no list + concatenate copy),
+    # with one worker per CPU actually allocated to this session
+    n_jobs = min(20, len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1))
+    bitcrunch = np.empty((pc.shape[0], xdim, ydim), dtype=np.uint8)
+    vidslices = joblib.Parallel(n_jobs=n_jobs, return_as="generator")(joblib.delayed(resize_bitcrunch)(pc[i[0]:i[1]], xdim, ydim, frame_dtype) for i in refslice)
+    for i, vidslice in zip(refslice, vidslices):
+        bitcrunch[i[0]:i[1]] = vidslice
     return bitcrunch
     
 
