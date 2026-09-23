@@ -23,6 +23,16 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`).
 - SNR / r-value: from the HDF5, falling back to `quality_scores.npz`
 - Review labels are saved to `results_quality.csv` in the plane folder
 
+**Known issue: ROI outlines are transposed on OLL outputs.** `oll_caiman_segmentation.py`
+writes CaImAn's memmap in C (row-major) pixel order, but CaImAn reads it as Fortran
+order, so CaImAn segments the movie transposed. The pipeline's own outputs
+(`roi_masks.npy`, `stat.npy`, `roi_outlines.png`) undo this and are correct, but this
+reader follows the CaImAn convention, so on OLL `results.hdf5` files every outline is
+drawn mirrored across the diagonal relative to the movie (a cell at row r, column c is
+outlined at row c, column r). Trace, SNR and r-value per cell ID are unaffected; do not
+judge cells by which part of the movie their outline covers. Only square frames give a
+pure transpose; non-square frames would be scrambled in CaImAn itself.
+
 Runs as a GUI: use an OSCAR OnDemand Desktop session, not the login node or Code Server.
 ```bash
 conda create -y -n caiman_reader_env python=3.10 numpy scipy matplotlib tifffile h5py pillow scikit-image joblib tk
