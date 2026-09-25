@@ -23,6 +23,8 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
 - SNR / r-value: from the HDF5, falling back to `quality_scores.npz`
 - Review labels are saved to `results_quality.csv` in the plane folder
 - The movie is sized so the whole window fits the screen (at most 2x)
+- Trace plot: blue = raw (`C + YrA`), orange = dF/F. The **Z-score** box in the plot toolbar shows both
+  z-scored per cell over the whole session, (x - mean) / std, as in the pipeline's `traces_zscore.npy`
 - Click an outline on the movie to select that cell; tick **Display all** first to see every outline. The active cell is drawn in yellow.
 
 **ROI orientation on OLL outputs.** `oll_caiman_segmentation.py` writes CaImAn's memmap

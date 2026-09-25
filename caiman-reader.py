@@ -472,13 +472,23 @@ def previous_cell():
     update_mpl()
     update_readout()
 
+def zscore(trace):
+    """Per cell over the whole session, as the OLL pipeline's traces_zscore.npy."""
+    return (trace - trace.mean()) / max(trace.std(), F0_FLOOR)
+
+
 def update_mpl():
     global traces, ax, mpl_canvas, active_cell, frame_scroll, vertical_line
     raw_trace = traces[int(active_cell.get())][0]
     fdf = traces[int(active_cell.get())][1]
     ax.cla()
-    ax.plot(raw_trace, alpha=0.5)
-    ax.plot(fdf, alpha=0.8)
+    if zscore_traces.get():
+        ax.plot(zscore(raw_trace), alpha=0.5, label="raw (C+YrA), z")
+        ax.plot(zscore(fdf), alpha=0.8, label="ΔF/F, z")
+    else:
+        ax.plot(raw_trace, alpha=0.5, label="raw (C+YrA)")
+        ax.plot(fdf, alpha=0.8, label="ΔF/F")
+    ax.legend(loc="upper right", fontsize=7, framealpha=0.6)
     vertical_line = None
     mpl_scan(float(frame_scroll.get()))
     mpl_canvas.draw()
@@ -625,6 +635,10 @@ mpl_canvas.get_tk_widget().pack()
 
 tools = NavigationToolbar2Tk(mpl_canvas, mpl_frame)
 tools.update()
+# In the toolbar so it takes no extra height
+zscore_traces = tk.BooleanVar(value=False)
+tk.Checkbutton(tools, text="Z-score", variable=zscore_traces, onvalue=True, offvalue=False,
+               command=lambda: update_mpl() if traces else None).pack(side=tk.LEFT)
 mpl_canvas.get_tk_widget().pack()
 ##########################################################
 

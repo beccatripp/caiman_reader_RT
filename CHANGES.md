@@ -179,6 +179,21 @@ out of `update_readout` so `fit_scale` can measure the readout's size).
 every frame shown and never removed the old ones, so playback kept adding items to the
 canvas. The previous frame is now deleted first.
 
+### 12. Z-scored traces and a legend
+
+The original plotted the raw trace (`C + YrA`) and ΔF/F on one y-axis with no legend.
+When the raw values were large, ΔF/F was squashed flat near zero, and it wasn't clear
+which line was which.
+- **Legend:** the plot now labels the lines "raw (C+YrA)" (blue) and "ΔF/F" (orange).
+- **Z-score option:** a **Z-score** checkbox in the plot's toolbar shows both traces
+  z-scored per cell over the whole session: (x − mean) / std, with the std floored at
+  `F0_FLOOR`. This is the pipeline's `compute_zscore`, so the ΔF/F line matches that
+  cell's row of `traces_zscore.npy` (ΔF/F is a per-cell linear function of `C`, so its
+  z-score equals the z-score of `C`). Both lines then share a scale. It is off by
+  default. The box sits in the toolbar so it adds no height to the window.
+
+New helper: `zscore(trace)`.
+
 ---
 
 ## filters.py
