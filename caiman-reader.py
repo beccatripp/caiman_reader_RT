@@ -12,6 +12,7 @@ import h5py
 from scipy.sparse import csc_matrix
 import skimage.transform 
 from scipy.spatial import ConvexHull
+from scipy.ndimage import percentile_filter
 from tkinter import ttk
 from tkinter import font
 import csv
@@ -28,6 +29,12 @@ USE_OVERLAP_FILTER = "--overlap-filter" in sys.argv
 # is the same one saved to traces_dff.npy
 F0_PERCENTILE = 8.0
 F0_FLOOR = 1e-6
+
+# Rolling-baseline option: F0(t) = F0_PERCENTILE-th percentile of C in a sliding
+# window. Without a frame rate the window falls back to CaImAn's detrend_df_f
+# default of 500 frames.
+ROLLING_WINDOW_S = 60
+ROLLING_WINDOW_FRAMES_DEFAULT = 500
 
 # The movie is shown at most 2x its native size (the original fixed upscale), and
 # smaller when the whole window would not otherwise fit on the screen. The margins
@@ -56,6 +63,26 @@ def find_movie(fold):
                 key, _, value = line.partition("=")
                 if key.strip() == "input_tif":
                     return value.strip()
+    return None
+
+
+def load_frame_rate(h5, fold):
+    """Frames per second: CaImAn's params/data/fr, else fs in run_parameters.txt,
+    else None."""
+    try:
+        return float(h5["params"]["data"]["fr"][()])
+    except (KeyError, TypeError, ValueError):
+        pass
+    run_params = os.path.join(fold, "run_parameters.txt")
+    if os.path.exists(run_params):
+        with open(run_params, "r") as f:
+            for line in f:
+                key, _, value = line.partition("=")
+                if key.strip() == "fs":
+                    try:
+                        return float(value.split("#")[0])
+                    except ValueError:
+                        pass
     return None
 
 
@@ -117,7 +144,7 @@ def fit_scale(tif):
 
 
 def initialize_project():
-    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root, h5_path
+    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root, h5_path, rolling_window
 
     fold = filedialog.askdirectory(initialdir=initpath, title="Select Folder")
     if not fold:
@@ -144,6 +171,7 @@ def initialize_project():
         n_components = h5['estimates']['C'].shape[0]
         new_snr = load_quality_metric(h5, fold, "SNR_comp", "snr", n_components)
         new_rval = load_quality_metric(h5, fold, "r_values", "rval", n_components)
+        fr = load_frame_rate(h5, fold)
 
         # Default: review every component CaImAn accepted (estimates/idx_components).
         # --overlap-filter additionally applies filters.ROISet (r-value prepass, then
@@ -170,6 +198,8 @@ def initialize_project():
     folder.set(fold)
     h5_path = h5_file
     footprints, traces, snr, rval = new_footprints, new_traces, new_snr, new_rval
+    rolling_window = max(3, int(round(ROLLING_WINDOW_S * fr))) if fr else ROLLING_WINDOW_FRAMES_DEFAULT
+    print(f"Rolling baseline window: {rolling_window} frames" + (f" ({ROLLING_WINDOW_S} s at {fr:g} Hz)" if fr else " (no frame rate found)"))
     active_vid = load_tiffstack(tif, size_up)
 
     quality_check = {int(k): '' for k in footprints.keys()}
@@ -327,7 +357,7 @@ def generate_footprints(h5, scale=1, rois_to_use=None, order="F"):
     for i, j in enumerate(C):    
         raw_traces[i,:] = np.add(YrA[i,:], j)
     
-    traces = {k:[raw_traces[k], F_dff[k]] for k in range(0,len(C))}
+    traces = {k:[raw_traces[k], F_dff[k], C[k]] for k in range(0,len(C))}
     if not cells:
         return {}, traces
 
@@ -478,17 +508,32 @@ def zscore(trace):
 
 
 def update_mpl():
+    """Left axis: dF/F, or its z-score, with either the global F0 (as stored /
+    traces_dff.npy) or a rolling-percentile F0. Right axis: the raw trace and
+    the F0 baseline, in fluorescence units."""
     global traces, ax, mpl_canvas, active_cell, frame_scroll, vertical_line
-    raw_trace = traces[int(active_cell.get())][0]
-    fdf = traces[int(active_cell.get())][1]
+    raw_trace, fdf, C = traces[int(active_cell.get())]
     ax.cla()
-    if zscore_traces.get():
-        ax.plot(zscore(raw_trace), alpha=0.5, label="raw (C+YrA), z")
-        ax.plot(zscore(fdf), alpha=0.8, label="ΔF/F, z")
+    ax_raw.cla()
+    if rolling_f0.get():
+        F0 = percentile_filter(C, F0_PERCENTILE, size=rolling_window, mode="nearest")
+        F0 = np.where(np.isfinite(F0) & (F0 > F0_FLOOR), F0, F0_FLOOR)
+        fdf = (C - F0) / F0
+        f0_label = "rolling F0"
     else:
-        ax.plot(raw_trace, alpha=0.5, label="raw (C+YrA)")
-        ax.plot(fdf, alpha=0.8, label="ΔF/F")
-    ax.legend(loc="upper right", fontsize=7, framealpha=0.6)
+        F0 = np.full(len(C), np.nanpercentile(C, F0_PERCENTILE))
+        f0_label = "global F0"
+    if zscore_traces.get():
+        ax.plot(zscore(fdf), color="C1", alpha=0.9, label=f"ΔF/F ({f0_label}), z")
+    else:
+        ax.plot(fdf, color="C1", alpha=0.9, label=f"ΔF/F ({f0_label})")
+    ax_raw.plot(raw_trace, color="C0", alpha=0.35, label="raw C+YrA (right axis)")
+    ax_raw.plot(F0, color="C0", linestyle="--", linewidth=1, label="F0 (right axis)")
+    # Main trace drawn above the raw axis
+    ax.set_zorder(ax_raw.get_zorder() + 1)
+    ax.patch.set_visible(False)
+    handles = ax.get_legend_handles_labels()[0] + ax_raw.get_legend_handles_labels()[0]
+    ax.legend(handles=handles, loc="upper right", fontsize=6, framealpha=0.6)
     vertical_line = None
     mpl_scan(float(frame_scroll.get()))
     mpl_canvas.draw()
@@ -630,13 +675,18 @@ new_project.grid(row=0, column=2)
 
 fig = Figure(figsize=(7,1.5))  #ADD DIMENSIONS/DPI
 ax = fig.add_subplot()
+ax_raw = ax.twinx()
+rolling_window = ROLLING_WINDOW_FRAMES_DEFAULT
 mpl_canvas = FigureCanvasTkAgg(fig, master=mpl_frame)
 mpl_canvas.get_tk_widget().pack()
 
 tools = NavigationToolbar2Tk(mpl_canvas, mpl_frame)
 tools.update()
-# In the toolbar so it takes no extra height
+# In the toolbar so they take no extra height; independent of each other
 zscore_traces = tk.BooleanVar(value=False)
+rolling_f0 = tk.BooleanVar(value=False)
+tk.Checkbutton(tools, text="Rolling F0", variable=rolling_f0, onvalue=True, offvalue=False,
+               command=lambda: update_mpl() if traces else None).pack(side=tk.LEFT)
 tk.Checkbutton(tools, text="Z-score", variable=zscore_traces, onvalue=True, offvalue=False,
                command=lambda: update_mpl() if traces else None).pack(side=tk.LEFT)
 mpl_canvas.get_tk_widget().pack()

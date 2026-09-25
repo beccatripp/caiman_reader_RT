@@ -179,20 +179,33 @@ out of `update_readout` so `fit_scale` can measure the readout's size).
 every frame shown and never removed the old ones, so playback kept adding items to the
 canvas. The previous frame is now deleted first.
 
-### 12. Z-scored traces and a legend
+### 12. Trace plot: baseline and z-score options
 
 The original plotted the raw trace (`C + YrA`) and ΔF/F on one y-axis with no legend.
 When the raw values were large, ΔF/F was squashed flat near zero, and it wasn't clear
 which line was which.
-- **Legend:** the plot now labels the lines "raw (C+YrA)" (blue) and "ΔF/F" (orange).
-- **Z-score option:** a **Z-score** checkbox in the plot's toolbar shows both traces
-  z-scored per cell over the whole session: (x − mean) / std, with the std floored at
-  `F0_FLOOR`. This is the pipeline's `compute_zscore`, so the ΔF/F line matches that
-  cell's row of `traces_zscore.npy` (ΔF/F is a per-cell linear function of `C`, so its
-  z-score equals the z-score of `C`). Both lines then share a scale. It is off by
-  default. The box sits in the toolbar so it adds no height to the window.
 
-New helper: `zscore(trace)`.
+**Two axes.** ΔF/F (orange) is on the left axis. The raw trace (faint blue) and the
+baseline F0 (dashed) are on a right-hand axis in fluorescence units, so each keeps its
+own scale. A legend labels every line.
+
+**Two independent toggles** in the plot's toolbar, so they add no height to the window:
+- **Rolling F0** (off by default): F0(t) is the `F0_PERCENTILE` (8th) percentile of `C`
+  in a sliding window (`scipy.ndimage.percentile_filter`), floored at `F0_FLOOR`, and
+  ΔF/F = (C − F0(t)) / F0(t). The window is `ROLLING_WINDOW_S` = 60 s. The frame rate
+  comes from CaImAn's `params/data/fr` in the HDF5, else `fs` in `run_parameters.txt`;
+  with neither, the window is 500 frames (CaImAn's `detrend_df_f` default). The
+  terminal prints the window used. This removes slow baseline drift, which a single
+  session-wide F0 can't. With the box off, ΔF/F is the stored / global-F0 one, the same
+  as `traces_dff.npy`.
+- **Z-score** (off by default): the ΔF/F above, z-scored per cell over the whole
+  session: (x − mean) / std, with the std floored at `F0_FLOOR`. With the global F0
+  this is the pipeline's `compute_zscore` and matches `traces_zscore.npy`. ΔF/F is then
+  a per-cell linear function of `C`, so its z-score equals the z-score of `C`. With the
+  rolling F0 the shape differs, because the drift is removed first.
+
+`generate_footprints` now also keeps `C` for each component (the rolling baseline needs
+it). New helpers: `zscore(trace)`, `load_frame_rate(h5, fold)`.
 
 ---
 
