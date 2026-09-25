@@ -207,6 +207,33 @@ own scale. A legend labels every line.
 `generate_footprints` now also keeps `C` for each component (the rolling baseline needs
 it). New helpers: `zscore(trace)`, `load_frame_rate(h5, fold)`.
 
+### 13. Eraser: reject many cells by dragging
+
+For clearing pockets of false positives quickly. With **Eraser (drag to reject)**
+ticked (below the Accept / Reject / Flag buttons), pressing and dragging on the movie
+labels as Reject (`R`) every drawn outline whose line the cursor passes over.
+- **Hit test:** "passes over" means the path between two mouse positions comes within
+  `ERASER_TOLERANCE` (3) screen pixels of one of the outline's edges, or crosses it
+  (`segment_distances`). Dragging entirely inside an outline doesn't reject it.
+- **Which cells:** only outlines currently drawn, as for click-to-select (§11), so tick
+  **Display all** or a per-label box first. Already rejected cells are skipped.
+- **Undo:** each stroke is one undo step. **Undo** (or Ctrl+Z) puts back the labels the
+  cells had before the stroke. The history is cleared when another plane is opened.
+- **Feedback:** rejected outlines are drawn dashed (also after the Reject button), the
+  cell list and readout update at once, and the terminal prints how many cells each
+  stroke rejected. Labels still need **Save Quality Values** to reach the CSV.
+- **Cursor:** a pencil while the eraser is on. With it off, a click selects a cell as
+  before.
+
+Checked on a synthetic plane of 400 cells in a grid: a stroke along one row rejected
+exactly the 11 cells it crossed, Undo restored them, and each drag step took about
+6 ms with all 400 outlines shown.
+
+New helpers: `drawn_cells`, `on_movie_press` / `on_movie_drag` / `on_movie_release`,
+`segment_distances`, `erase_along`, `undo_erase`, `set_label`, `toggle_eraser`, and
+`color_cell_button` (split out of `review_confirmed`; it now also underlines a cell in
+the list again when Undo returns it to unreviewed).
+
 ---
 
 ## filters.py

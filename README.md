@@ -28,6 +28,9 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
   - **Rolling F0**: F0 is the 8th percentile of `C` in a sliding 60 s window (frame rate from the HDF5 or
     `run_parameters.txt`; 500 frames if none) instead of over the whole session, which removes slow drift
   - **Z-score**: dF/F z-scored per cell over the whole session, (x - mean) / std, as in `traces_zscore.npy`
+- **Eraser (drag to reject)**: with the box ticked, drag across the movie; every visible outline whose line
+  the cursor crosses is labelled Reject. **Undo** (or Ctrl+Z) restores the last stroke. Rejected outlines
+  are dashed. Tick **Display all** (or **Unreviewed ROIs**) first so the outlines you want to erase are shown
 - Click an outline on the movie to select that cell; tick **Display all** first to see every outline. The active cell is drawn in yellow.
 
 **ROI orientation on OLL outputs.** `oll_caiman_segmentation.py` writes CaImAn's memmap

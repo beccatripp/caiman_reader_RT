@@ -36,6 +36,10 @@ F0_FLOOR = 1e-6
 ROLLING_WINDOW_S = 60
 ROLLING_WINDOW_FRAMES_DEFAULT = 500
 
+# Eraser: an outline is rejected when the dragged cursor passes within this many
+# screen pixels of its line
+ERASER_TOLERANCE = 3
+
 # The movie is shown at most 2x its native size (the original fixed upscale), and
 # smaller when the whole window would not otherwise fit on the screen. The margins
 # leave room for the window title bar and the desktop's panels.
@@ -203,6 +207,9 @@ def initialize_project():
     active_vid = load_tiffstack(tif, size_up)
 
     quality_check = {int(k): '' for k in footprints.keys()}
+    # Undo only applies within one plane
+    erase_history.clear()
+    undo_button.config(state=tk.DISABLED)
     quality_csv = quality_csv_path(h5_file)
     if not os.path.exists(quality_csv):
         print("NEW QUALITY CSV")
@@ -397,9 +404,103 @@ def generate_footprints(h5, scale=1, rois_to_use=None, order="F"):
 
 def draw_outline(cell, highlight=False):
     """Outline of one cell on the movie. highlight marks the active cell when
-    several outlines are shown."""
+    several outlines are shown; rejected cells are dashed."""
     tifviz.create_polygon(footprints[cell], fill="", outline="yellow" if highlight else "red",
-                          width=2 if highlight else 1, tags=("overlay", f"cell{cell}"))
+                          width=2 if highlight else 1, tags=("overlay", f"cell{cell}"),
+                          dash=(4, 3) if quality_check.get(cell) == "R" else "")
+
+
+def drawn_cells():
+    """Cells whose outlines are currently on the movie."""
+    return {int(t[4:]) for item in tifviz.find_withtag("overlay")
+            for t in tifviz.gettags(item) if t.startswith("cell")}
+
+
+def on_movie_press(e):
+    global erase_stroke, erase_last
+    if not eraser_on.get():
+        select_on_movie(e)
+        return
+    erase_stroke = []
+    erase_last = (tifviz.canvasx(e.x), tifviz.canvasy(e.y))
+    erase_along(erase_last, erase_last)
+
+
+def on_movie_drag(e):
+    global erase_last
+    if not eraser_on.get() or erase_last is None:
+        return
+    point = (tifviz.canvasx(e.x), tifviz.canvasy(e.y))
+    erase_along(erase_last, point)
+    erase_last = point
+
+
+def on_movie_release(e):
+    global erase_last
+    if eraser_on.get() and erase_stroke:
+        erase_history.append(erase_stroke)
+        undo_button.config(state=tk.NORMAL)
+        print(f"Eraser: rejected {len(erase_stroke)} cells")
+    erase_last = None
+
+
+def segment_distances(p0, p1, q0, q1):
+    """Distance from segment p0-p1 to each segment q0[i]-q1[i] (arrays of shape (n, 2))."""
+    def point_to_segments(p, a, b):
+        ab = b - a
+        t = np.clip(np.einsum("ij,ij->i", p - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0, 1)
+        return np.hypot(*(a + t[:, None] * ab - p).T)
+    def cross(o, a, b):
+        return (a[..., 0] - o[..., 0]) * (b[..., 1] - o[..., 1]) - (a[..., 1] - o[..., 1]) * (b[..., 0] - o[..., 0])
+    P0, P1 = np.broadcast_to(p0, q0.shape), np.broadcast_to(p1, q0.shape)
+    d = np.minimum.reduce([point_to_segments(P0, q0, q1), point_to_segments(P1, q0, q1),
+                           point_to_segments(q0, P0, P1), point_to_segments(q1, P0, P1)])
+    crossing = ((cross(P0, P1, q0) * cross(P0, P1, q1) < 0) & (cross(q0, q1, P0) * cross(q0, q1, P1) < 0))
+    return np.where(crossing, 0.0, d)
+
+
+def erase_along(p0, p1):
+    """Reject every drawn, not-yet-rejected cell whose outline the cursor passed
+    over while moving from p0 to p1."""
+    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+    lo, hi = np.minimum(p0, p1) - ERASER_TOLERANCE, np.maximum(p0, p1) + ERASER_TOLERANCE
+    hit = []
+    for cell in drawn_cells():
+        if quality_check[cell] == "R":
+            continue
+        pts = np.reshape(footprints[cell], (-1, 2)).astype(float)
+        if (pts.max(0) < lo).any() or (pts.min(0) > hi).any():
+            continue
+        if segment_distances(p0, p1, pts, np.roll(pts, -1, axis=0)).min() <= ERASER_TOLERANCE:
+            hit.append(cell)
+    for cell in hit:
+        erase_stroke.append((cell, quality_check[cell]))
+        set_label(cell, "R")
+    if hit:
+        update_overlay()
+
+
+def undo_erase(e=None):
+    """Put back the labels from the last eraser stroke."""
+    if not erase_history:
+        return
+    for cell, label in erase_history.pop():
+        set_label(cell, label)
+    if not erase_history:
+        undo_button.config(state=tk.DISABLED)
+    update_overlay()
+
+
+def set_label(cell, label):
+    """Set a cell's review label from outside the Accept / Reject / Flag buttons."""
+    quality_check[cell] = label
+    color_cell_button(cell, label)
+    update_readout()
+    save_status.config(image=klaxon)
+
+
+def toggle_eraser():
+    tifviz.config(cursor="pencil" if eraser_on.get() else "")
 
 
 def select_on_movie(e):
@@ -460,13 +561,19 @@ def update_qualdict():
     quality_check[int(active_cell.get())] = str(quality.get())
     update_readout()
     save_status.config(image=klaxon)
+    update_overlay()  # rejected outlines are dashed
 
 def review_confirmed(uncheck):
     global scrollable_buttons, quality
+    color_cell_button(uncheck, quality.get())
+
+
+def color_cell_button(cell, label):
+    """Colour a cell's entry in the cell list by its label (underlined if unreviewed)."""
     quality_color = {"A":"#198114", "R":"#443F9E", "F":"#ac0f0f", "":"#000000"}
     for rb in scrollable_buttons.winfo_children():
-        if isinstance(rb, tk.Radiobutton) and (int(rb.cget("value")) == uncheck):
-            rb.config(font=font.Font(size=16), foreground=quality_color[quality.get()])
+        if isinstance(rb, tk.Radiobutton) and (int(rb.cget("value")) == cell):
+            rb.config(font=font.Font(size=16, underline=(label == '')), foreground=quality_color[label])
 
 
 
@@ -696,7 +803,12 @@ mpl_canvas.get_tk_widget().pack()
 readout = tk.Label(readoutfr, anchor="e", justify="left")
 tifviz = tk.Canvas(viz, width=1, height=1)
 tifviz.grid(row=1, columnspan=2)
-tifviz.bind("<Button-1>", select_on_movie)
+tifviz.bind("<ButtonPress-1>", on_movie_press)
+tifviz.bind("<B1-Motion>", on_movie_drag)
+tifviz.bind("<ButtonRelease-1>", on_movie_release)
+erase_stroke = []
+erase_last = None
+erase_history = []
 frame_scroll = tk.Scale(viz, from_=0, to=1, orient="horizontal", command=scale_img)
 frame_scroll.grid(row=0, column=1)
 
@@ -721,6 +833,14 @@ quality = tk.StringVar()
 
 toggle_cellview = tk.Checkbutton(eval_frame, text="Toggle ROI view off", onvalue=True, offvalue=False, variable=hidecell, command=single_switch)
 toggle_cellview.grid(row=0, column=0, columnspan=2)
+
+# Eraser: drag across outlines on the movie to reject those cells
+eraser_on = tk.BooleanVar(value=False)
+eraser = tk.Checkbutton(eval_frame, text="Eraser (drag to reject)", onvalue=True, offvalue=False, variable=eraser_on, command=toggle_eraser)
+undo_button = tk.Button(eval_frame, text="Undo", state=tk.DISABLED, command=undo_erase)
+eraser.grid(row=3, column=0, columnspan=2)
+undo_button.grid(row=3, column=2)
+root.bind("<Control-z>", undo_erase)
 
 accept = tk.Radiobutton(eval_frame, text="Accept", variable=quality, value="A", foreground="#198114", command=update_qualdict)
 reject = tk.Radiobutton(eval_frame, text="Reject", variable=quality, value="R", foreground="#443F9E", command=update_qualdict)
