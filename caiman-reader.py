@@ -15,6 +15,7 @@ from scipy.spatial import ConvexHull
 from tkinter import ttk
 from tkinter import font
 import csv
+from matplotlib.path import Path
 import sys
 import filters
 
@@ -27,6 +28,13 @@ USE_OVERLAP_FILTER = "--overlap-filter" in sys.argv
 # is the same one saved to traces_dff.npy
 F0_PERCENTILE = 8.0
 F0_FLOOR = 1e-6
+
+# The movie is shown at most 2x its native size (the original fixed upscale), and
+# smaller when the whole window would not otherwise fit on the screen. The margins
+# leave room for the window title bar and the desktop's panels.
+MAX_SCALE = 2
+SCREEN_MARGIN_W = 40
+SCREEN_MARGIN_H = 100
 
 h5_path = None
 root = tk.Tk()
@@ -68,6 +76,25 @@ def load_quality_metric(h5, fold, h5_key, npz_key, n_components):
     return [float("nan")] * n_components
 
 
+def fit_scale(tif):
+    """Movie scale at which the whole window fits on the screen, at most MAX_SCALE."""
+    with tifffile.TiffFile(tif) as t:
+        rows, cols = t.pages[0].shape[:2]
+    if not readout.cget("text"):
+        # First load: measure with a readout as large as a real one
+        readout.config(text=readout_text(0, "Unreviewed", 0.0, 0.0, [""] * 1000))
+    root.update_idletasks()
+    # Height of everything except the movie: the movie shares its row with the
+    # cell list, so take out whichever of the two is taller
+    movie_row_h = max(radioframe.winfo_reqheight(), viz.winfo_reqheight())
+    movie_extra_h = viz.winfo_reqheight() - tifviz.winfo_reqheight()
+    other_h = root.winfo_reqheight() - movie_row_h + movie_extra_h
+    left_w = max(f.winfo_reqwidth() for f in (readoutfr, radioframe, eval_frame))
+    avail_h = root.winfo_screenheight() - SCREEN_MARGIN_H - other_h
+    avail_w = root.winfo_screenwidth() - SCREEN_MARGIN_W - left_w
+    return max(0.25, min(MAX_SCALE, avail_h / rows, avail_w / cols))
+
+
 def initialize_project():
     global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root, h5_path
 
@@ -88,7 +115,8 @@ def initialize_project():
         return
     print(tif)
 
-    size_up = 2
+    size_up = fit_scale(tif)
+    print(f"Movie scale: {size_up:.2f}x")
 
     # Load into locals first so a failed load leaves the current project intact
     with h5py.File(h5_file, "r") as h5:
@@ -164,8 +192,9 @@ class LazyMovie:
             self._frames = None
             self._n = len(self._tiff.pages)
         first = self._raw(0)
-        self.xdim = first.shape[0]*size_up
-        self.ydim = first.shape[1]*size_up
+        # Same rounding as skimage.transform.rescale, which sizes the outlines
+        self.xdim = int(np.round(first.shape[0]*size_up))
+        self.ydim = int(np.round(first.shape[1]*size_up))
         self.frame_dtype = first.dtype
         self._cache = {}
 
@@ -200,7 +229,8 @@ def tif2frame(arrtiff, i):
     height, width = aframe.shape
     tifviz.config(height=height, width=width)
     img = ImageTk.PhotoImage(Image.fromarray(aframe))
-    tifviz.create_image(0,0, anchor=tk.NW, image=img)
+    tifviz.delete("frame")
+    tifviz.create_image(0,0, anchor=tk.NW, image=img, tags="frame")
     update_overlay()
     tifviz.image = img
 
@@ -292,7 +322,8 @@ def generate_footprints(h5, scale=1, rois_to_use=None):
         onefeet = np.reshape(feet[:, j],  (y_dims,  x_dims)).T 
 
         bounds = []
-        onefeet= skimage.transform.rescale(onefeet, scale, anti_aliasing=True) 
+        # No anti-aliasing: when shrinking, its blur would widen every outline
+        onefeet= skimage.transform.rescale(onefeet, scale, anti_aliasing=False) 
         pxlft = np.argwhere(onefeet!=0)
         bounds = np.asarray(pxlft)
         hull = ConvexHull(bounds)
@@ -310,14 +341,47 @@ def generate_footprints(h5, scale=1, rois_to_use=None):
 
 
 
+def draw_outline(cell, highlight=False):
+    """Outline of one cell on the movie. highlight marks the active cell when
+    several outlines are shown."""
+    tifviz.create_polygon(footprints[cell], fill="", outline="yellow" if highlight else "red",
+                          width=2 if highlight else 1, tags=("overlay", f"cell{cell}"))
+
+
+def select_on_movie(e):
+    """Click inside a drawn outline to make that cell the active one. Where
+    outlines overlap, the smallest one containing the click wins."""
+    if not footprints:
+        return
+    point = (tifviz.canvasx(e.x), tifviz.canvasy(e.y))
+    hits = []
+    for item in tifviz.find_withtag("overlay"):
+        cell = next(int(t[4:]) for t in tifviz.gettags(item) if t.startswith("cell"))
+        pts = np.reshape(footprints[cell], (-1, 2))
+        if Path(pts).contains_point(point):
+            x, y = pts[:, 0], pts[:, 1]
+            area = 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+            hits.append((area, cell))
+    if hits:
+        select_cell(min(hits)[1])
+
+
+def select_cell(cell):
+    active_cell.set(cell)
+    update_overlay()
+    update_mpl()
+    # Scroll the cell list to the selected cell
+    cells = list(footprints)
+    radiocanvas.yview_moveto(cells.index(cell) / len(cells))
+
+
 def update_overlay():
     global active_cell, tifviz, footprints, quality_check, quality, hidecell, alla, allr, allf, allu
     cell = active_cell.get()
-    ft_list = footprints[cell]
     tifviz.delete("overlay")
     if not hidecell.get():
         if not (alla.get() or allr.get() or allf.get() or allu.get()):
-            tifviz.create_polygon(ft_list, fill="", outline="red", tags="overlay")
+            draw_outline(cell)
         else:
             toggle_all()
 
@@ -411,15 +475,19 @@ def update_readout():
     qkey = {"A":"Accepted", "R": "Rejected", "F":"Flagged", '':"Unreviewed"}
     overall_status = [*quality_check.values()]
 
-    rout = f"""Cell ID: {active_cell.get()}
-Quality label: {qkey[quality.get()]}
-SNR: {round(snr[active_cell.get()], 3)}
-Spatial Correlation: {round(rval[active_cell.get()], 3)}
+    cell = active_cell.get()
+    readout.config(text=readout_text(cell, qkey[quality.get()], snr[cell], rval[cell], overall_status))
+
+
+def readout_text(cell, label, snr_value, rval_value, overall_status):
+    return f"""Cell ID: {cell}
+Quality label: {label}
+SNR: {round(snr_value, 3)}
+Spatial Correlation: {round(rval_value, 3)}
 Number of Cells:
 Total: {len(overall_status)} Accepted: {overall_status.count("A")} Rejected: {overall_status.count("R")} 
 Flagged: {overall_status.count("F")} Unreviewed: {overall_status.count("")}
 """
-    readout.config(text=rout)
 
 def toggle_all():
     global quality_check, alla, allr, allf, footprints, quality, active_cell
@@ -434,11 +502,12 @@ def toggle_all():
     if allu.get():
         disp_u = [c for c, r in quality_check.items() if r==""]    
     disps = disp_a + disp_r + disp_f + disp_u 
+    active = active_cell.get()
     for i in disps:
-        ft = footprints[i]
-        tifviz.create_polygon(ft, fill="", outline="red", tags="overlay")
-    if not (alla.get() or allr.get() or allf.get() or allu.get()):
-        tifviz.create_polygon(footprints[active_cell.get()], fill="", outline="red", tags="overlay")
+        if i != active:
+            draw_outline(i)
+    # Active cell last so it sits on top; highlighted when others are shown
+    draw_outline(active, highlight=bool(disps))
 
 def single_switch():
     global active_cell, footprints
@@ -448,7 +517,7 @@ def single_switch():
         if (alla.get() or allr.get() or allf.get() or allu.get()):
             toggle_all()
         else:    
-            tifviz.create_polygon(footprints[active_cell.get()], fill="", outline="red", tags="overlay") 
+            draw_outline(active_cell.get())
 
 def allinone():
     global allaccepted, allrejected, allflagged, allunrev, allall
@@ -488,34 +557,13 @@ footprints={}
 quality_check = {}
 playing=False
 
-# Everything sits in a scrollable area: the 2x-upscaled movie plus the trace
-# can be taller than the screen (e.g. an OSCAR Desktop session)
-page_canvas = tk.Canvas(root, highlightthickness=0)
-page_vscroll = ttk.Scrollbar(root, orient="vertical", command=page_canvas.yview)
-page_hscroll = ttk.Scrollbar(root, orient="horizontal", command=page_canvas.xview)
-page_canvas.configure(yscrollcommand=page_vscroll.set, xscrollcommand=page_hscroll.set)
-page_vscroll.pack(side=tk.RIGHT, fill=tk.Y)
-page_hscroll.pack(side=tk.BOTTOM, fill=tk.X)
-page_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-page = tk.Frame(page_canvas)
-page_canvas.create_window((0,0), window=page, anchor="nw")
-
-def fit_page(e):
-    # Scroll over the whole content; size the window to it, capped at the screen
-    page_canvas.configure(scrollregion=page_canvas.bbox("all"))
-    w = min(page.winfo_reqwidth() + page_vscroll.winfo_reqwidth(), root.winfo_screenwidth() - 50)
-    h = min(page.winfo_reqheight() + page_hscroll.winfo_reqheight(), root.winfo_screenheight() - 100)
-    root.geometry(f"{w}x{h}")
-
-page.bind("<Configure>", fit_page)
-
-viz = tk.Frame(page)
-radioframe = tk.Frame(page)
-eval_frame = tk.Frame(page)
-projb_frame = tk.Frame(page)
-mpl_frame = tk.Frame(page)
+viz = tk.Frame(root)
+radioframe = tk.Frame(root)
+eval_frame = tk.Frame(root)
+projb_frame = tk.Frame(root)
+mpl_frame = tk.Frame(root)
 radiocanvas = tk.Canvas(radioframe, height=220, width=80)
-readoutfr = tk.Frame(page)
+readoutfr = tk.Frame(root)
 
 #Eval buttons:
 
@@ -560,6 +608,7 @@ mpl_canvas.get_tk_widget().pack()
 readout = tk.Label(readoutfr, anchor="e", justify="left")
 tifviz = tk.Canvas(viz, width=1, height=1)
 tifviz.grid(row=1, columnspan=2)
+tifviz.bind("<Button-1>", select_on_movie)
 frame_scroll = tk.Scale(viz, from_=0, to=1, orient="horizontal", command=scale_img)
 frame_scroll.grid(row=0, column=1)
 

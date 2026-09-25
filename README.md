@@ -22,6 +22,8 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
 - dF/F: `estimates/F_dff` if saved, otherwise computed from `C` with the pipeline's formula (8th-percentile F0)
 - SNR / r-value: from the HDF5, falling back to `quality_scores.npz`
 - Review labels are saved to `results_quality.csv` in the plane folder
+- The movie is sized so the whole window fits the screen (at most 2x)
+- Click an outline on the movie to select that cell; tick **Display all** first to see every outline. The active cell is drawn in yellow.
 
 **Known issue: ROI outlines are transposed on OLL outputs.** `oll_caiman_segmentation.py`
 writes CaImAn's memmap in C (row-major) pixel order, but CaImAn reads it as Fortran

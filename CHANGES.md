@@ -9,9 +9,9 @@ CaImAn outputs of the OLL pipeline (`OLL_Processing/oll_caiman_segmentation.py`)
 original author and is included here with the changes listed under
 [filters.py](#filterspy).
 
-What did **not** change: the GUI layout (apart from the scrollbars in §9), the review labels (Accept / Reject / Flag)
-and their colours, how each frame is displayed (2× upscale, then each frame scaled to
-its own min–max as 8-bit), how outlines are drawn (convex hull of the footprint), and
+What did **not** change: the GUI layout, the review labels (Accept / Reject / Flag)
+and their colours, how each frame is displayed (resized, then each frame scaled to
+its own min–max as 8-bit; the size is now fitted to the screen, see §10), how outlines are drawn (convex hull of the footprint), and
 the footprint orientation convention (see [Known issue](#known-issue-not-changed)).
 
 ---
@@ -134,13 +134,49 @@ Frames are now produced on demand by a `LazyMovie` class (returned by
 ### 9. Smaller changes
 
 - **Imports:** removed `yaml` (unused) and `joblib` (no longer needed); added `sys` (for
-  `--overlap-filter`) and `tkinter.messagebox` (for the error dialogs).
+  `--overlap-filter`), `tkinter.messagebox` (for the error dialogs) and
+  `matplotlib.path.Path` (for clicking outlines, §11).
 - **Welcome text:** now tells the user to choose a plane folder, e.g.
   `Segmentation_caImAn/<date>/<mouse>/plane0`.
-- **Scrollable window:** the main window now sits inside a scrollable area with vertical
-  and horizontal scrollbars, and opens no larger than the screen. At 2× upscale a
-  512×512 plane is 1024 px tall before the trace plot and buttons, which is more than
-  an OSCAR Desktop screen, so the bottom of the window could not be reached.
+
+### 10. Movie size fitted to the screen
+
+The original always showed the movie at 2× its native size. A 512×512 plane then
+takes 1024 px of height before the trace plot and buttons, which is more than an
+OSCAR Desktop screen, so the bottom of the window could not be reached.
+
+The scale is now worked out when a plane is opened (`fit_scale`): the largest scale,
+up to 2×, at which the whole window fits on the screen. The margins
+(`SCREEN_MARGIN_W`, `SCREEN_MARGIN_H`) leave room for the title bar and the desktop's
+panels. The terminal prints the scale used. Examples for a 512×512 plane: 0.59× on a
+1024×768 screen, 0.97× on 1536×960, 1.91× on 2560×1440.
+
+The outlines use the same scale. To keep them in line with the movie at fractional
+scales:
+- **Rounding:** the movie size is rounded the same way `skimage.transform.rescale`
+  sizes the outlines.
+- **No anti-aliasing:** the footprint rescale no longer uses anti-aliasing. It had no
+  effect when enlarging, but when shrinking its blur would widen every outline.
+  Results at 2× are unchanged.
+
+### 11. Selecting cells by clicking the movie
+
+Clicking inside an outline drawn on the movie makes that cell the active one. This is
+the same as choosing it in the cell list: the trace, readout and Accept / Reject / Flag
+buttons switch to it, and the list scrolls to it.
+- **Which outlines:** only the outlines currently drawn can be clicked, so tick
+  **Display all** (or one of the per-label boxes) to pick cells from the movie.
+- **Overlaps:** where outlines overlap, the smallest one containing the click wins.
+- **Active cell:** when several outlines are shown, the active cell is drawn in
+  yellow, thicker, on top. Before, every outline was red, so the active cell could not
+  be told apart.
+
+New helpers: `draw_outline`, `select_on_movie`, `select_cell`, and `readout_text` (split
+out of `update_readout` so `fit_scale` can measure the readout's size).
+
+**Movie frames no longer pile up.** `tif2frame` added a new image to the canvas for
+every frame shown and never removed the old ones, so playback kept adding items to the
+canvas. The previous frame is now deleted first.
 
 ---
 
