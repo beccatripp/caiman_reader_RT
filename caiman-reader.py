@@ -487,13 +487,35 @@ traces = {}
 footprints={}
 quality_check = {}
 playing=False
-viz = tk.Frame(root)
-radioframe = tk.Frame(root)
-eval_frame = tk.Frame(root)
-projb_frame = tk.Frame(root)
-mpl_frame = tk.Frame(root)
+
+# Everything sits in a scrollable area: the 2x-upscaled movie plus the trace
+# can be taller than the screen (e.g. an OSCAR Desktop session)
+page_canvas = tk.Canvas(root, highlightthickness=0)
+page_vscroll = ttk.Scrollbar(root, orient="vertical", command=page_canvas.yview)
+page_hscroll = ttk.Scrollbar(root, orient="horizontal", command=page_canvas.xview)
+page_canvas.configure(yscrollcommand=page_vscroll.set, xscrollcommand=page_hscroll.set)
+page_vscroll.pack(side=tk.RIGHT, fill=tk.Y)
+page_hscroll.pack(side=tk.BOTTOM, fill=tk.X)
+page_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+page = tk.Frame(page_canvas)
+page_canvas.create_window((0,0), window=page, anchor="nw")
+
+def fit_page(e):
+    # Scroll over the whole content; size the window to it, capped at the screen
+    page_canvas.configure(scrollregion=page_canvas.bbox("all"))
+    w = min(page.winfo_reqwidth() + page_vscroll.winfo_reqwidth(), root.winfo_screenwidth() - 50)
+    h = min(page.winfo_reqheight() + page_hscroll.winfo_reqheight(), root.winfo_screenheight() - 100)
+    root.geometry(f"{w}x{h}")
+
+page.bind("<Configure>", fit_page)
+
+viz = tk.Frame(page)
+radioframe = tk.Frame(page)
+eval_frame = tk.Frame(page)
+projb_frame = tk.Frame(page)
+mpl_frame = tk.Frame(page)
 radiocanvas = tk.Canvas(radioframe, height=220, width=80)
-readoutfr = tk.Frame(root)
+readoutfr = tk.Frame(page)
 
 #Eval buttons:
 

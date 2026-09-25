@@ -9,7 +9,7 @@ CaImAn outputs of the OLL pipeline (`OLL_Processing/oll_caiman_segmentation.py`)
 original author and is included here with the changes listed under
 [filters.py](#filterspy).
 
-What did **not** change: the GUI layout, the review labels (Accept / Reject / Flag)
+What did **not** change: the GUI layout (apart from the scrollbars in §9), the review labels (Accept / Reject / Flag)
 and their colours, how each frame is displayed (2× upscale, then each frame scaled to
 its own min–max as 8-bit), how outlines are drawn (convex hull of the footprint), and
 the footprint orientation convention (see [Known issue](#known-issue-not-changed)).
@@ -137,6 +137,10 @@ Frames are now produced on demand by a `LazyMovie` class (returned by
   `--overlap-filter`) and `tkinter.messagebox` (for the error dialogs).
 - **Welcome text:** now tells the user to choose a plane folder, e.g.
   `Segmentation_caImAn/<date>/<mouse>/plane0`.
+- **Scrollable window:** the main window now sits inside a scrollable area with vertical
+  and horizontal scrollbars, and opens no larger than the screen. At 2× upscale a
+  512×512 plane is 1024 px tall before the trace plot and buttons, which is more than
+  an OSCAR Desktop screen, so the bottom of the window could not be reached.
 
 ---
 
