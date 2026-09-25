@@ -76,6 +76,27 @@ def load_quality_metric(h5, fold, h5_key, npz_key, n_components):
     return [float("nan")] * n_components
 
 
+def footprint_order(h5, fold):
+    """Pixel order of the footprints in estimates/A: 'F' is CaImAn's convention.
+    OLL pipeline outputs are 'C': the pipeline writes CaImAn's memmap in C order,
+    so CaImAn segments a transposed movie (see README). Decided by comparing with
+    the pipeline's roi_masks.npy, which is in the movie's orientation; without it,
+    a run_parameters.txt marks an OLL output."""
+    masks_path = os.path.join(fold, "roi_masks.npy")
+    H, W = (int(d) for d in h5['estimates']['dims'][()])
+    if os.path.exists(masks_path):
+        masks = np.load(masks_path)
+        a = h5['estimates']['A']
+        A = csc_matrix((a['data'][()], a['indices'][()], a['indptr'][()]), shape=tuple(a['shape'][()]))
+        idx = np.array(h5['estimates']['idx_components'][()], dtype=int)
+        if masks.ndim == 3 and masks.shape[:2] == (H, W) and masks.shape[2] and len(idx):
+            covered = np.asarray((A[:, idx] != 0).sum(axis=1)).ravel() > 0
+            target = masks.any(axis=2)
+            match = {o: (covered.reshape(H, W, order=o) & target).sum() for o in "CF"}
+            return "C" if match["C"] >= match["F"] else "F"
+    return "C" if os.path.exists(os.path.join(fold, "run_parameters.txt")) else "F"
+
+
 def fit_scale(tif):
     """Movie scale at which the whole window fits on the screen, at most MAX_SCALE."""
     with tifffile.TiffFile(tif) as t:
@@ -136,7 +157,9 @@ def initialize_project():
             rois_to_use = roiset.filter_high_overlap(corr_thresh=0.1, overlap=0.45)
             print(f"Overlap filter kept {len(rois_to_use)} of {len(roiset.good_idxs)} accepted components")
 
-        new_footprints, new_traces = generate_footprints(h5, scale=size_up, rois_to_use=rois_to_use)
+        order = footprint_order(h5, fold)
+        print("Footprint pixel order:", "C (OLL output, transposed back to match the movie)" if order == "C" else "F (CaImAn)")
+        new_footprints, new_traces = generate_footprints(h5, scale=size_up, rois_to_use=rois_to_use, order=order)
 
     if not new_footprints:
         messagebox.showerror("CaImAn Reader", f"No components to review in:\n{fold}")
@@ -284,7 +307,7 @@ def load_dff(h5):
     return (C - F0) / F0
 
 
-def generate_footprints(h5, scale=1, rois_to_use=None):
+def generate_footprints(h5, scale=1, rois_to_use=None, order="F"):
     if rois_to_use is not None:
         cells = [int(i) for i in rois_to_use]
     else:    
@@ -319,7 +342,8 @@ def generate_footprints(h5, scale=1, rois_to_use=None):
 
     for j in range(feet.shape[1]):
 
-        onefeet = np.reshape(feet[:, j],  (y_dims,  x_dims)).T 
+        # dims = (rows, cols); order is the footprints' pixel order (footprint_order)
+        onefeet = np.reshape(feet[:, j], (x_dims, y_dims), order=order)
 
         bounds = []
         # No anti-aliasing: when shrinking, its blur would widen every outline

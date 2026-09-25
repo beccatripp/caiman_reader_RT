@@ -10,9 +10,10 @@ original author and is included here with the changes listed under
 [filters.py](#filterspy).
 
 What did **not** change: the GUI layout, the review labels (Accept / Reject / Flag)
-and their colours, how each frame is displayed (resized, then each frame scaled to
-its own min–max as 8-bit; the size is now fitted to the screen, see §10), how outlines are drawn (convex hull of the footprint), and
-the footprint orientation convention (see [Known issue](#known-issue-not-changed)).
+and their colours, how each frame is displayed (resized, then each frame scaled to its
+own min–max as 8-bit; only the size changed, see §10), and how outlines are drawn
+(convex hull of the footprint). Footprint orientation is now detected per plane; see
+[ROI orientation on OLL outputs](#roi-orientation-on-oll-outputs).
 
 ---
 
@@ -209,19 +210,27 @@ and its thresholds are unchanged.
 
 ---
 
-## Known issue (not changed)
+## ROI orientation on OLL outputs
 
-On OLL `results.hdf5` files, ROI outlines are drawn **transposed** (mirrored across the
-diagonal) relative to the movie.
+On OLL `results.hdf5` files, ROI outlines used to be drawn **transposed** (mirrored across
+the diagonal) relative to the movie: a cell at row r, column c was outlined at row c,
+column r, which looked like outlines shifted off the cells.
 
-**Cause:** `oll_caiman_segmentation.py` writes CaImAn's memmap in row-major order,
-while CaImAn reads it column-major, so CaImAn segments a transposed movie. The
-pipeline's own outputs (`roi_masks.npy`, `stat.npy`, `roi_outlines.png`) undo this and
-are correct. This reader follows the standard CaImAn layout, so it doesn't.
+**Cause:** `oll_caiman_segmentation.py` writes CaImAn's memmap in row-major order, while
+CaImAn reads it column-major, so CaImAn segments a transposed movie. The pipeline's own
+outputs (`roi_masks.npy`, `stat.npy`, `roi_outlines.png`) undo this, but the reader read
+`estimates/A` with the standard CaImAn (Fortran) layout. The pipeline leaves
+`results.hdf5` as-is on purpose, so orientation stays the same across old and new runs.
 
-**Impact:** the trace, SNR and r-value shown for each component ID are correct, but
-don't judge a cell by which part of the movie its outline covers.
+**Now:** the new helper `footprint_order(h5, fold)` picks the pixel order per plane, and
+`generate_footprints` reshapes each footprint with it:
+- **With `roi_masks.npy`:** the order ('C' or 'F') whose accepted footprints overlap the
+  pipeline's masks more.
+- **Without it:** 'C' if the folder has a `run_parameters.txt` (an OLL output),
+  otherwise CaImAn's 'F'.
 
-**Why it's left as-is:** fixing it would make footprint orientation differ between
-`results.hdf5` files from older and newer runs. It is documented in the README and in
-the `oll_caiman_segmentation.py` module docstring.
+The terminal prints the order used. The 'F' reshape is unchanged from the original
+(`reshape((dims[1], dims[0])).T` is the same as `reshape(dims, order='F')`). Checked on
+synthetic planes in both layouts: outlines sit on the cells in each. Trace, SNR and
+r-value per component ID were never affected. Non-square frames are scrambled in CaImAn
+itself, so their outlines can't be fully right either way.

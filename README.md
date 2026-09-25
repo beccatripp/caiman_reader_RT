@@ -25,15 +25,14 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
 - The movie is sized so the whole window fits the screen (at most 2x)
 - Click an outline on the movie to select that cell; tick **Display all** first to see every outline. The active cell is drawn in yellow.
 
-**Known issue: ROI outlines are transposed on OLL outputs.** `oll_caiman_segmentation.py`
-writes CaImAn's memmap in C (row-major) pixel order, but CaImAn reads it as Fortran
-order, so CaImAn segments the movie transposed. The pipeline's own outputs
-(`roi_masks.npy`, `stat.npy`, `roi_outlines.png`) undo this and are correct, but this
-reader follows the CaImAn convention, so on OLL `results.hdf5` files every outline is
-drawn mirrored across the diagonal relative to the movie (a cell at row r, column c is
-outlined at row c, column r). Trace, SNR and r-value per cell ID are unaffected; do not
-judge cells by which part of the movie their outline covers. Only square frames give a
-pure transpose; non-square frames would be scrambled in CaImAn itself.
+**ROI orientation on OLL outputs.** `oll_caiman_segmentation.py` writes CaImAn's memmap
+in C (row-major) pixel order, but CaImAn reads it as Fortran order, so the footprints in
+an OLL `results.hdf5` are transposed relative to the movie. The reader detects this and
+reads them in C order, so outlines sit on the right cells. It compares the footprints
+with the pipeline's `roi_masks.npy` (which is in the movie's orientation), or, without
+that file, treats a folder with `run_parameters.txt` as an OLL output. The terminal
+prints which order was used. Non-square frames are scrambled in CaImAn itself, so their
+outlines can't be fully right either way.
 
 Runs as a GUI: use an OSCAR OnDemand Desktop session, not the login node or Code Server.
 ```bash
