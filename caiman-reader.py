@@ -344,6 +344,32 @@ def load_dff(h5):
     return (C - F0) / F0
 
 
+def load_background(h5, A):
+    """Per-component norm of A and background fluorescence under each component,
+    as in CaImAn's detrend_df_f: B = (A/||A||)^T b f, shape (K, T). None when the
+    HDF5 has no usable background (b, f)."""
+    est = h5['estimates']
+    b, f = est.get('b'), est.get('f')
+    try:
+        if isinstance(b, h5py.Group):
+            b = csc_matrix((b['data'][()], b['indices'][()], b['indptr'][()]), shape=tuple(b['shape'][()])).toarray()
+        else:
+            b = np.array(b[()], dtype=float)
+        f = np.array(f[()], dtype=float)
+    except (TypeError, KeyError, ValueError):
+        return None
+    if b.ndim == 1:
+        b = b[:, None]
+    if f.ndim == 1:
+        f = f[None, :]
+    if b.ndim != 2 or b.shape[0] != A.shape[0] or b.shape[1] != f.shape[0] or f.shape[1] != est['C'].shape[1]:
+        return None
+    nA = np.sqrt(np.ravel(A.power(2).sum(axis=0)))
+    nA = np.maximum(nA, np.finfo(np.float32).eps)
+    B = (np.asarray(A.T @ b) / nA[:, None]) @ f
+    return nA, B
+
+
 def generate_footprints(h5, scale=1, rois_to_use=None, order="F"):
     if rois_to_use is not None:
         cells = [int(i) for i in rois_to_use]
@@ -364,14 +390,17 @@ def generate_footprints(h5, scale=1, rois_to_use=None, order="F"):
     for i, j in enumerate(C):    
         raw_traces[i,:] = np.add(YrA[i,:], j)
     
-    traces = {k:[raw_traces[k], F_dff[k], C[k]] for k in range(0,len(C))}
+    sparse_mtx = csc_matrix((data, indices, indptr), shape=shape)
+    background = load_background(h5, sparse_mtx)
+    if background is None:
+        print("No background (b, f) in the HDF5: dF/F divides by the percentile of C")
+        traces = {k:[raw_traces[k], F_dff[k], C[k], None, None] for k in range(0,len(C))}
+    else:
+        nA, B = background
+        traces = {k:[raw_traces[k], F_dff[k], C[k], nA[k], B[k]] for k in range(0,len(C))}
     if not cells:
         return {}, traces
 
-    
-
-    
-    sparse_mtx = csc_matrix((data, indices, indptr), shape=shape)
     feet = sparse_mtx.toarray()
 
     feet = np.array([feet[:,i] for i in cells]).T
@@ -614,22 +643,39 @@ def zscore(trace):
     return (trace - trace.mean()) / max(trace.std(), F0_FLOOR)
 
 
+def percentile_baseline(trace):
+    """F0_PERCENTILE-th percentile of a trace: over a sliding window of
+    rolling_window frames with Rolling F0 ticked, else over the whole session."""
+    if rolling_f0.get():
+        return percentile_filter(trace, F0_PERCENTILE, size=rolling_window, mode="nearest")
+    return np.full(len(trace), np.nanpercentile(trace, F0_PERCENTILE))
+
+
 def update_mpl():
-    """Left axis: dF/F, or its z-score, with either the global F0 (as stored /
-    traces_dff.npy) or a rolling-percentile F0. Right axis: the raw trace and
-    the F0 baseline, in fluorescence units."""
+    """Left axis: dF/F, or its z-score. Right axis: the raw trace and its
+    baseline F0, in fluorescence units.
+
+    With CaImAn's background in the HDF5, dF/F follows CaImAn's detrend_df_f:
+    (F - Fd) / (Df + Fd), with F = C + YrA scaled by ||A||, Fd its percentile
+    baseline and Df the percentile baseline of the background under the cell.
+    Dividing by C's own baseline alone fails because C has its baseline
+    removed: in quiet stretches it is ~0 and dF/F explodes. Without a
+    background, falls back to (C - F0) / F0 (global F0: as stored /
+    traces_dff.npy)."""
     global traces, ax, mpl_canvas, active_cell, frame_scroll, vertical_line
-    raw_trace, fdf, C = traces[int(active_cell.get())]
+    raw_trace, fdf, C, nA, B = traces[int(active_cell.get())]
     ax.cla()
     ax_raw.cla()
-    if rolling_f0.get():
-        F0 = percentile_filter(C, F0_PERCENTILE, size=rolling_window, mode="nearest")
-        F0 = np.where(np.isfinite(F0) & (F0 > F0_FLOOR), F0, F0_FLOOR)
-        fdf = (C - F0) / F0
-        f0_label = "rolling F0"
+    f0_label = "rolling F0" if rolling_f0.get() else "global F0"
+    if B is not None:
+        F = nA * raw_trace
+        Fd, Df = percentile_baseline(F), percentile_baseline(B)
+        fdf = (F - Fd) / np.maximum(Df + Fd, F0_FLOOR)
+        F0 = Fd / nA
     else:
-        F0 = np.full(len(C), np.nanpercentile(C, F0_PERCENTILE))
-        f0_label = "global F0"
+        F0 = percentile_baseline(C)
+        if rolling_f0.get():
+            fdf = (C - F0) / np.where(np.isfinite(F0) & (F0 > F0_FLOOR), F0, F0_FLOOR)
     if zscore_traces.get():
         ax.plot(zscore(fdf), color="C1", alpha=0.9, label=f"ΔF/F ({f0_label}), z")
     else:

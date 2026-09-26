@@ -19,15 +19,17 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
 - Optional `--overlap-filter` applies `filters.ROISet`: drops accepted cells with r-value <= 0.3, then for ROI pairs
   overlapping > 45% with dF/F correlation > 0.1 keeps only the higher r-value x SNR one (filtered cells are hidden)
 - Movie: a `*preprocessed.tif` in the folder if present, otherwise the `input_tif` listed in `run_parameters.txt` (the deepCAD TIFF); frames are read and resized on demand, so memory use does not grow with recording length
-- dF/F: `estimates/F_dff` if saved, otherwise computed from `C` with the pipeline's formula (8th-percentile F0)
+- dF/F in the trace plot: CaImAn's `detrend_df_f` formula, (F - Fd) / (Df + Fd), computed from `A`, `b`, `C`, `f`
+  and `YrA` in the HDF5 (F = C + YrA, Fd its 8th-percentile baseline, Df the baseline of the background under the
+  cell). Without `b` / `f` it falls back to `estimates/F_dff`, or (C - F0) / F0 with the 8th percentile of `C`
 - SNR / r-value: from the HDF5, falling back to `quality_scores.npz`
 - Review labels are saved to `results_quality.csv` in the plane folder
 - The movie is sized so the whole window fits the screen (at most 2x)
 - Trace plot: orange = dF/F on the left axis; faint blue = raw (`C + YrA`) and dashed = baseline F0, both
   on the right axis in fluorescence units. Two independent boxes in the plot toolbar:
-  - **Rolling F0**: F0 is the 8th percentile of `C` in a sliding 60 s window (frame rate from the HDF5 or
+  - **Rolling F0**: the baselines are the 8th percentile in a sliding 60 s window (frame rate from the HDF5 or
     `run_parameters.txt`; 500 frames if none) instead of over the whole session, which removes slow drift
-  - **Z-score**: dF/F z-scored per cell over the whole session, (x - mean) / std, as in `traces_zscore.npy`
+  - **Z-score**: dF/F z-scored per cell over the whole session, (x - mean) / std
 - **Eraser (drag to reject)**: with the box ticked, drag across the movie; every visible outline whose line
   the cursor crosses is labelled Reject. **Undo** (or Ctrl+Z) restores the last stroke. Rejected outlines
   are dashed. Tick **Display all** (or **Unreviewed ROIs**) first so the outlines you want to erase are shown

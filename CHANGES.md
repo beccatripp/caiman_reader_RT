@@ -234,6 +234,42 @@ New helpers: `drawn_cells`, `on_movie_press` / `on_movie_drag` / `on_movie_relea
 `color_cell_button` (split out of `review_confirmed`; it now also underlines a cell in
 the list again when Undo returns it to unreviewed).
 
+### 14. ΔF/F uses CaImAn's detrend_df_f formula
+
+The ΔF/F in §4 and §12 divided by a percentile of `C`. CaImAn's `C` has its baseline
+removed, so between transients it decays to about 0. That F0 was then clamped to
+`F0_FLOOR` (1e-6), and ΔF/F came out about 10⁶ × `C`. With **Rolling F0** it was
+worse: in quiet windows F0 sat at the floor, but during dense activity `C` never
+returned to 0 and F0 became a real number, so the scale jumped by about 10⁷ between
+windows. Periods of strong activity, the largest peaks in the raw trace, were drawn
+as flat lines, and z-scoring can't undo that. On a synthetic trace with a burst, the
+burst came out at 0.000002% of the plot height.
+
+When the HDF5 has CaImAn's background (`estimates/b`, `estimates/f`), the trace plot now
+follows CaImAn's `detrend_df_f` (with a fixed percentile, i.e. `flag_auto=False`):
+- F = (C + YrA) × ‖A‖ and B = (A/‖A‖)ᵀ b f, the background fluorescence under the cell.
+- Fd and Df are the `F0_PERCENTILE` (8th) percentiles of F and B: over the whole
+  session, or over `rolling_window` frames with **Rolling F0** ticked.
+- ΔF/F = (F − Fd) / (Df + Fd). The denominator includes the background, so it never
+  gets close to 0.
+
+The dashed F0 line on the right axis is Fd / ‖A‖, the baseline of the raw trace.
+Checked against CaImAn's own `detrend_df_f` (source taken from CaImAn's GitHub `main`)
+on synthetic data with a burst: identical to rounding error (2e-16) in both modes,
+away from the first and last window. At the edges, CaImAn's `percentile_filter` pads
+by reflection and the reader repeats the end value. The burst is now the largest
+feature of the trace, as in the raw data.
+
+Without `b` / `f`, the plot falls back to the previous calculation and the terminal
+says so. New helpers: `load_background(h5, A)`, `percentile_baseline(trace)`.
+`generate_footprints` now also keeps ‖A‖ and the background trace for each component.
+
+**Not changed in the pipeline:** `estimates/F_dff` and `traces_dff.npy` (and so
+`traces_zscore.npy`, `mean_peak_dff`, SNR) are still computed by
+`oll_caiman_segmentation.py` as (C − F0) / F0 with F0 the 8th percentile of `C`. For
+cells whose `C` baseline is about 0, their values are about 10⁶ × `C`. The reader's
+ΔF/F therefore no longer matches `traces_dff.npy` when the background is available.
+
 ---
 
 ## filters.py
