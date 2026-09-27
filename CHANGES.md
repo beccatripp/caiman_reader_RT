@@ -68,10 +68,14 @@ New helper `load_dff(h5)`:
 - uses `estimates/F_dff` when it is a real array the same shape as `C`;
 - otherwise computes ΔF/F from `C` with the OLL pipeline's formula: F0 = 8th
   percentile per component, floored at 1e-6, ΔF/F = (C − F0) / F0 (constants
-  `F0_PERCENTILE`, `F0_FLOOR`). This matches `traces_dff.npy`.
+  `F0_PERCENTILE`, `F0_FLOOR`). This matched `traces_dff.npy` from older pipeline runs.
 
 `oll_caiman_segmentation.py` now writes `F_dff` itself, so newer HDF5 files use the
 stored array.
+
+The trace plot no longer uses this when the HDF5 has CaImAn's background (`b`, `f`):
+this formula divides by ~0 for CaImAn's `C`. See §14. `load_dff` is still used by
+`--overlap-filter` and as the fallback without a background.
 
 ### 5. SNR and r-value
 
@@ -246,16 +250,21 @@ as flat lines, and z-scoring can't undo that. On a synthetic trace with a burst,
 burst came out at 0.000002% of the plot height.
 
 When the HDF5 has CaImAn's background (`estimates/b`, `estimates/f`), the trace plot now
-follows CaImAn's `detrend_df_f` (with a fixed percentile, i.e. `flag_auto=False`):
-- F = (C + YrA) × ‖A‖ and B = (A/‖A‖)ᵀ b f, the background fluorescence under the cell.
+follows CaImAn's `detrend_df_f` with `YrA=None` and a fixed percentile
+(`flag_auto=False`):
+- F = C × ‖A‖ and B = (A/‖A‖)ᵀ b f, the background fluorescence under the cell.
 - Fd and Df are the `F0_PERCENTILE` (8th) percentiles of F and B: over the whole
   session, or over `rolling_window` frames with **Rolling F0** ticked.
 - ΔF/F = (F − Fd) / (Df + Fd). The denominator includes the background, so it never
   gets close to 0.
 
-The dashed F0 line on the right axis is Fd / ‖A‖, the baseline of the raw trace.
+The dashed F0 line on the right axis is Fd / ‖A‖, the baseline of `C`. ΔF/F is built
+from `C` (CaImAn's denoised trace), not `C + YrA`, so that with the whole-session
+baseline it is exactly the pipeline's saved ΔF/F (next paragraph). The raw `C + YrA`
+is still drawn on the right axis.
+
 Checked against CaImAn's own `detrend_df_f` (source taken from CaImAn's GitHub `main`)
-on synthetic data with a burst: identical to rounding error (2e-16) in both modes,
+on synthetic data with a burst of activity: identical to rounding error in both modes,
 away from the first and last window. At the edges, CaImAn's `percentile_filter` pads
 by reflection and the reader repeats the end value. The burst is now the largest
 feature of the trace, as in the raw data.
@@ -264,11 +273,16 @@ Without `b` / `f`, the plot falls back to the previous calculation and the termi
 says so. New helpers: `load_background(h5, A)`, `percentile_baseline(trace)`.
 `generate_footprints` now also keeps ‖A‖ and the background trace for each component.
 
-**Not changed in the pipeline:** `estimates/F_dff` and `traces_dff.npy` (and so
-`traces_zscore.npy`, `mean_peak_dff`, SNR) are still computed by
-`oll_caiman_segmentation.py` as (C − F0) / F0 with F0 the 8th percentile of `C`. For
-cells whose `C` baseline is about 0, their values are about 10⁶ × `C`. The reader's
-ΔF/F therefore no longer matches `traces_dff.npy` when the background is available.
+**Pipeline and saved files (OLL_Processing).** `oll_caiman_segmentation.py` now saves
+ΔF/F with the same formula (`compute_dff_caiman`, whole-session baseline) in
+`traces_dff.npy` and `estimates/F_dff`. Outputs written before that are fixed in place
+by `scripts/recompute_caiman_dff.py`, which also updates `mean_peak_dff` /
+`std_peak_dff` in `metrics.txt` and keeps the old files as `traces_dff_old.npy` /
+`metrics_old.txt`. `traces_zscore.npy`, the SNR values and which cells were accepted
+are unchanged: per cell the new ΔF/F is `C` shifted and rescaled, and the pipeline's
+SNR is scale-invariant. The rolling baseline is a display option only; it is not
+saved. After the recompute, the reader's ΔF/F (whole-session baseline) equals
+`traces_dff.npy`, checked on a synthetic plane to float32 precision.
 
 ---
 

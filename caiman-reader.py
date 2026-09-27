@@ -655,20 +655,20 @@ def update_mpl():
     """Left axis: dF/F, or its z-score. Right axis: the raw trace and its
     baseline F0, in fluorescence units.
 
-    With CaImAn's background in the HDF5, dF/F follows CaImAn's detrend_df_f:
-    (F - Fd) / (Df + Fd), with F = C + YrA scaled by ||A||, Fd its percentile
-    baseline and Df the percentile baseline of the background under the cell.
-    Dividing by C's own baseline alone fails because C has its baseline
-    removed: in quiet stretches it is ~0 and dF/F explodes. Without a
-    background, falls back to (C - F0) / F0 (global F0: as stored /
-    traces_dff.npy)."""
+    With CaImAn's background in the HDF5, dF/F follows CaImAn's detrend_df_f
+    with YrA=None: (F - Fd) / (Df + Fd), with F = C scaled by ||A||, Fd its
+    percentile baseline and Df the percentile baseline of the background under
+    the cell. With the global F0 this is the OLL pipeline's compute_dff_caiman,
+    i.e. traces_dff.npy. Dividing by C's own baseline alone fails because C has
+    its baseline removed: in quiet stretches it is ~0 and dF/F explodes.
+    Without a background, falls back to (C - F0) / F0 (global F0: as stored)."""
     global traces, ax, mpl_canvas, active_cell, frame_scroll, vertical_line
     raw_trace, fdf, C, nA, B = traces[int(active_cell.get())]
     ax.cla()
     ax_raw.cla()
     f0_label = "rolling F0" if rolling_f0.get() else "global F0"
     if B is not None:
-        F = nA * raw_trace
+        F = nA * C
         Fd, Df = percentile_baseline(F), percentile_baseline(B)
         fdf = (F - Fd) / np.maximum(Df + Fd, F0_FLOOR)
         F0 = Fd / nA

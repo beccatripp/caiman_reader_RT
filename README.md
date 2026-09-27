@@ -19,9 +19,11 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
 - Optional `--overlap-filter` applies `filters.ROISet`: drops accepted cells with r-value <= 0.3, then for ROI pairs
   overlapping > 45% with dF/F correlation > 0.1 keeps only the higher r-value x SNR one (filtered cells are hidden)
 - Movie: a `*preprocessed.tif` in the folder if present, otherwise the `input_tif` listed in `run_parameters.txt` (the deepCAD TIFF); frames are read and resized on demand, so memory use does not grow with recording length
-- dF/F in the trace plot: CaImAn's `detrend_df_f` formula, (F - Fd) / (Df + Fd), computed from `A`, `b`, `C`, `f`
-  and `YrA` in the HDF5 (F = C + YrA, Fd its 8th-percentile baseline, Df the baseline of the background under the
-  cell). Without `b` / `f` it falls back to `estimates/F_dff`, or (C - F0) / F0 with the 8th percentile of `C`
+- dF/F in the trace plot: CaImAn's `detrend_df_f` formula, (F - Fd) / (Df + Fd), computed from `A`, `b`, `C` and
+  `f` in the HDF5 (F = C scaled by the footprint norm, Fd its 8th-percentile baseline, Df the baseline of the
+  background under the cell). With the whole-session baseline this equals the pipeline's `traces_dff.npy`
+  (OLL_Processing `compute_dff_caiman`; older outputs are updated by `scripts/recompute_caiman_dff.py` there).
+  Without `b` / `f` it falls back to `estimates/F_dff`, or (C - F0) / F0 with the 8th percentile of `C`
 - SNR / r-value: from the HDF5, falling back to `quality_scores.npz`
 - Review labels are saved to `results_quality.csv` in the plane folder
 - The movie is sized so the whole window fits the screen (at most 2x)
