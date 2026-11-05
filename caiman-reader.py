@@ -24,6 +24,9 @@ initpath = os.path.dirname(os.path.abspath(__file__))
 
 # python caiman-reader.py --overlap-filter  -> also apply filters.ROISet
 USE_OVERLAP_FILTER = "--overlap-filter" in sys.argv
+# python caiman-reader.py --model-labels  -> start from the classifier's
+# results_quality_model.csv; Save still writes results_quality.csv
+USE_MODEL_LABELS = "--model-labels" in sys.argv
 
 # Must match OLL_Processing/oll_caiman_segmentation.py so the dF/F shown here
 # is the same one saved to traces_dff.npy
@@ -93,6 +96,24 @@ def load_frame_rate(h5, fold):
 def quality_csv_path(h5_file):
     """results.hdf5 -> results_quality.csv in the same folder."""
     return os.path.splitext(h5_file)[0] + "_quality.csv"
+
+
+def model_quality_csv_path(h5_file):
+    """results.hdf5 -> results_quality_model.csv (written by classifier/scripts/apply.py)."""
+    return os.path.splitext(h5_file)[0] + "_quality_model.csv"
+
+
+def read_quality_csv(path, quality_check, skip_blank=False):
+    """Copy labels from a quality CSV into quality_check for the cells shown.
+    With skip_blank, unreviewed ('') entries don't overwrite existing labels.
+    Returns the number of labels copied."""
+    n = 0
+    with open(path, "r") as f:
+        for k, v in csv.reader(f):
+            if int(k) in quality_check and not (skip_blank and v == ''):
+                quality_check[int(k)] = v
+                n += 1
+    return n
 
 
 def load_quality_metric(h5, fold, h5_key, npz_key, n_components):
@@ -211,15 +232,21 @@ def initialize_project():
     erase_history.clear()
     undo_button.config(state=tk.DISABLED)
     quality_csv = quality_csv_path(h5_file)
+    if USE_MODEL_LABELS:
+        # Model labels first, then any manual labels already saved on top, so a
+        # partly corrected plane resumes where it was left
+        model_csv = model_quality_csv_path(h5_file)
+        if os.path.exists(model_csv):
+            print(f"Model labels: {read_quality_csv(model_csv, quality_check)} from {model_csv}")
+        else:
+            print(f"No {os.path.basename(model_csv)} in this folder: cells start unlabelled")
     if not os.path.exists(quality_csv):
         print("NEW QUALITY CSV")
     else:
-        with open(quality_csv, "r") as f:
-            r = csv.reader(f)
-            for pair in r:
-                k, v = pair
-                if int(k) in quality_check:
-                    quality_check[int(k)] = v
+        n = read_quality_csv(quality_csv, quality_check, skip_blank=USE_MODEL_LABELS)
+        print(f"Manual labels: {n} from {quality_csv}")
+    if USE_MODEL_LABELS:
+        print(f"Save writes {os.path.basename(quality_csv)} (the model file is never changed)")
 
 
     active_cell.set(int(list(footprints.keys())[0]))

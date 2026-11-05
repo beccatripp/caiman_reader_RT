@@ -1,0 +1,16 @@
+# conda env create -f classifier/environment.yml
+name: caiman_classifier_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=1.26
+  - scipy=1.13
+  - pandas=2.2
+  - pyarrow=16
+  - h5py=3.11
+  - scikit-learn=1.5
+  - xgboost=2.1
+  - matplotlib=3.9
+  - pyyaml=6.0
+  - tifffile=2024.8.30

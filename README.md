@@ -26,6 +26,8 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
   Without `b` / `f` it falls back to `estimates/F_dff`, or (C - F0) / F0 with the 8th percentile of `C`
 - SNR / r-value: from the HDF5, falling back to `quality_scores.npz`
 - Review labels are saved to `results_quality.csv` in the plane folder
+- `--model-labels` starts from the auto-QC classifier's `results_quality_model.csv` (see `classifier/README.md`),
+  with any labels already saved in `results_quality.csv` on top; Save still writes only `results_quality.csv`
 - The movie is sized so the whole window fits the screen (at most 2x)
 - Trace plot: orange = dF/F on the left axis; faint blue = raw (`C + YrA`) and dashed = baseline F0, both
   on the right axis in fluorescence units. Two independent boxes in the plot toolbar:
@@ -52,4 +54,8 @@ conda create -y -n caiman_reader_env python=3.10 numpy scipy matplotlib tifffile
 conda activate caiman_reader_env
 python caiman-reader.py                    # CaImAn-accepted cells
 python caiman-reader.py --overlap-filter   # + filters.ROISet
+python caiman-reader.py --model-labels     # start from the classifier's labels
 ```
+
+**Auto-QC classifier.** `classifier/` trains an XGBoost model on the manual labels and writes
+`results_quality_model.csv` for unreviewed planes, as OSCAR batch jobs. See `classifier/README.md`.

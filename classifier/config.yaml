@@ -1,0 +1,74 @@
+# Auto-QC classifier for OLL CaImAn segmentation (see README.md)
+
+data_root: /oscar/home/rtripp/data/rtripp/OLL_DATA_S2026_Processed/Segmentation_caImAn_002
+output_root: /oscar/home/rtripp/data/rtripp/caiman_classifier_model
+
+random_seed: 0
+
+# Planes with complete manual labels (results_quality.csv). Only these are ever
+# used for training: a plane reviewed with caiman-reader --model-labels holds
+# model-seeded labels and must not be added here unless it was fully re-checked.
+# Changes from the original list: RB05 plane0 26-03-29 -> 26-03-21 (no RB05 folder
+# on 03-29) and RB07 plane0 26-03-26 -> 26-03-24 (03-26 has no labels).
+training_planes:
+  RB01:
+    plane0: [26-03-12, 26-03-22, 26-04-06, 26-04-07, 26-04-09]
+    plane1: [26-04-08]
+  RB05:
+    plane0: [26-02-28, 26-03-06, 26-03-11, 26-03-21, 26-04-10]
+    plane1: [26-04-01]
+  RB06:
+    plane0: [26-03-03, 26-03-09, 26-03-10, 26-03-11, 26-03-12, 26-03-15, 26-03-21, 26-03-24,
+             26-03-27, 26-04-01, 26-04-04, 26-04-05, 26-04-07, 26-04-09, 26-04-11]
+    plane1: [26-03-29]
+  RB07:
+    plane0: [26-03-09, 26-03-15, 26-03-24, 26-03-30, 26-04-10]
+    plane1: [26-03-27]
+  RB08:
+    plane0: [26-03-04, 26-03-05, 26-03-13, 26-03-16, 26-03-21]
+    plane1: [26-03-14]
+  RB09:
+    plane0: [26-03-01, 26-03-10, 26-03-22, 26-03-29, 26-04-08]
+    plane1: [26-02-24]
+
+# Locked test set: one plane0 per animal, drawn with numpy default_rng(0) before
+# any training. Never used for tuning or feature decisions; scored once by
+# scripts/evaluate.py --locked-test.
+test_planes:
+  RB01: {plane0: [26-04-09]}
+  RB05: {plane0: [26-03-21]}
+  RB06: {plane0: [26-03-24]}
+  RB07: {plane0: [26-03-15]}
+  RB08: {plane0: [26-03-05]}
+  RB09: {plane0: [26-03-01]}
+
+features:
+  mask_threshold: 0.2        # fraction of footprint peak (pipeline roi_mask_threshold)
+  baseline_percentile: 8.0   # dF/F baseline, as caiman-reader and traces_dff.npy
+  neighbor_radius_px: 75     # ~3 cell diameters
+  neighbor_corr_thresh: 0.5
+  annulus_inner_px: 2
+  annulus_outer_px: 10
+  event_z: 3.0
+  hf_cutoff_hz: 1.0
+
+movie_features:
+  chunk_frames: 200
+  shift_crop_px: 256         # central crop for frame-shift estimation
+
+model:
+  # Inner-CV grid for the tuned XGBoost models
+  grid:
+    max_depth: [3, 5]
+    min_child_weight: [1, 5]
+    scale_pos_weight: [1, balanced]   # balanced = n_reject / n_accept of the fit
+  learning_rate: 0.05
+  max_estimators: 800
+  subsample: 0.8
+  colsample_bytree: 0.8
+  inner_folds: 5
+
+# Pre-registered bar for the prospective blind check (scripts/evaluate.py --compare)
+prospective_pass:
+  balanced_accuracy: 0.80
+  kappa: 0.60

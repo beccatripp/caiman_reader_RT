@@ -284,6 +284,24 @@ SNR is scale-invariant. The rolling baseline is a display option only; it is not
 saved. After the recompute, the reader's ΔF/F (whole-session baseline) equals
 `traces_dff.npy`, checked on a synthetic plane to float32 precision.
 
+### 15. Starting from the classifier's labels (`--model-labels`)
+
+`classifier/` (see its README) writes `results_quality_model.csv` next to
+`results_quality.csv`, in the same format. `python caiman-reader.py --model-labels`
+loads a plane's labels in two steps:
+1. `results_quality_model.csv`, if present.
+2. Any non-blank labels already in `results_quality.csv`, on top, so a partly
+   corrected plane resumes where it was left.
+
+**Save** still writes only `results_quality.csv`; the model file is never changed. The
+terminal prints how many labels came from each file. Without the flag, loading is
+unchanged. New helpers: `model_quality_csv_path(h5_file)`, `read_quality_csv(path,
+quality_check, skip_blank)`.
+
+A plane saved after reviewing with `--model-labels` holds model-seeded labels. The
+classifier only trains on the planes listed in `classifier/config.yaml`, so such a plane
+is used for training only if it is added there on purpose.
+
 ---
 
 ## filters.py
