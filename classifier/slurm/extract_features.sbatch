@@ -1,6 +1,6 @@
 #!/bin/bash
 # Core features (G1-G8) for one plane per array task.
-#   sbatch --array=0-45 slurm/extract_features.sbatch --training
+#   sbatch --array=0-44 slurm/extract_features.sbatch --training
 #   sbatch --array=0-N  slurm/extract_features.sbatch --plane-list LIST.txt
 #SBATCH -J cmclf_extract
 #SBATCH -p batch

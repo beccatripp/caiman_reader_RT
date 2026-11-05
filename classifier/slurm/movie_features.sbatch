@@ -1,6 +1,6 @@
 #!/bin/bash
 # Optional G9 movie features (reads each plane's movie once).
-#   sbatch --array=0-45 slurm/movie_features.sbatch --training
+#   sbatch --array=0-44 slurm/movie_features.sbatch --training
 #SBATCH -J cmclf_movie
 #SBATCH -p batch
 #SBATCH -c 2

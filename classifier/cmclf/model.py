@@ -14,7 +14,7 @@ import xgboost as xgb
 from joblib import Parallel, delayed
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, cohen_kappa_score
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -90,9 +90,15 @@ def matrix(df, features):
 
 # ── Estimators ───────────────────────────────────────────────────────────────
 
-def best_threshold(y, p):
-    """Threshold maximising balanced accuracy (ties: closest to 0.5)."""
-    scores = np.array([balanced_accuracy_score(y, p >= t) for t in THRESHOLDS])
+THRESHOLD_OBJECTIVES = {"kappa": cohen_kappa_score, "balanced_accuracy": balanced_accuracy_score}
+
+
+def best_threshold(y, p, objective="kappa"):
+    """Threshold maximising the objective (ties: closest to 0.5). Cohen's kappa
+    keeps the accept rate near the manual one; balanced accuracy over-accepts
+    when only ~25% of cells are accepted."""
+    score = THRESHOLD_OBJECTIVES[objective]
+    scores = np.array([score(y, p >= t) for t in THRESHOLDS])
     best = np.flatnonzero(scores >= scores.max() - 1e-12)
     return float(THRESHOLDS[best[np.argmin(np.abs(THRESHOLDS[best] - 0.5))]])
 
@@ -121,8 +127,9 @@ def inner_splits(groups, n_folds):
 
 def tune_xgb(X, y, groups, mcfg, seed=0):
     """Grid over mcfg['grid'] with inner GroupKFold by plane. Trees: argmin of
-    the mean inner validation log-loss curve. Threshold: balanced-accuracy
-    optimum of the inner out-of-fold predictions at that many trees."""
+    the mean inner validation log-loss curve. Threshold: optimum of
+    mcfg['threshold_objective'] on the inner out-of-fold predictions at that
+    many trees."""
     splits = inner_splits(groups, mcfg["inner_folds"])
     grid = mcfg["grid"]
     keys = list(grid)
@@ -145,7 +152,7 @@ def tune_xgb(X, y, groups, mcfg, seed=0):
     for (tr, va), m in zip(splits, best.pop("models")):
         n = min(best["n_estimators"], m.get_booster().num_boosted_rounds())
         oof[va] = m.predict_proba(X[va], iteration_range=(0, n))[:, 1]
-    best["threshold"] = best_threshold(y, oof)
+    best["threshold"] = best_threshold(y, oof, mcfg.get("threshold_objective", "kappa"))
     return best
 
 
@@ -163,7 +170,8 @@ def fit_model(kind, X, y, groups, mcfg, seed=0):
         for tr, va in inner_splits(groups, mcfg["inner_folds"]):
             oof[va] = make_logistic().fit(X[tr], y[tr]).predict_proba(X[va])[:, 1]
         m = make_logistic().fit(X, y)
-        return (lambda Xn: m.predict_proba(Xn)[:, 1]), dict(threshold=best_threshold(y, oof)), m
+        threshold = best_threshold(y, oof, mcfg.get("threshold_objective", "kappa"))
+        return (lambda Xn: m.predict_proba(Xn)[:, 1]), dict(threshold=threshold), m
     if kind == "xgb_tuned":
         info = tune_xgb(X, y, groups, mcfg, seed)
         m = make_xgb(mcfg, info["params"], y, n_estimators=info["n_estimators"], seed=seed)

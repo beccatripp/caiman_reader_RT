@@ -9,7 +9,8 @@ random_seed: 0
 # used for training: a plane reviewed with caiman-reader --model-labels holds
 # model-seeded labels and must not be added here unless it was fully re-checked.
 # Changes from the original list: RB05 plane0 26-03-29 -> 26-03-21 (no RB05 folder
-# on 03-29) and RB07 plane0 26-03-26 -> 26-03-24 (03-26 has no labels).
+# on 03-29). RB07 plane0 26-03-26 has no labels and is left out; so is
+# 26-03-24, which is only partly labelled (23 of 157 cells).
 training_planes:
   RB01:
     plane0: [26-03-12, 26-03-22, 26-04-06, 26-04-07, 26-04-09]
@@ -22,7 +23,7 @@ training_planes:
              26-03-27, 26-04-01, 26-04-04, 26-04-05, 26-04-07, 26-04-09, 26-04-11]
     plane1: [26-03-29]
   RB07:
-    plane0: [26-03-09, 26-03-15, 26-03-24, 26-03-30, 26-04-10]
+    plane0: [26-03-09, 26-03-15, 26-03-30, 26-04-10]
     plane1: [26-03-27]
   RB08:
     plane0: [26-03-04, 26-03-05, 26-03-13, 26-03-16, 26-03-21]
@@ -67,6 +68,9 @@ model:
   subsample: 0.8
   colsample_bytree: 0.8
   inner_folds: 5
+  # Decision threshold, chosen on inner-fold predictions: kappa or balanced_accuracy.
+  # v20261105 used balanced_accuracy (threshold ~0.21, ~44% more accepts than manual).
+  threshold_objective: kappa
 
 # Pre-registered bar for the prospective blind check (scripts/evaluate.py --compare)
 prospective_pass:

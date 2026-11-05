@@ -36,15 +36,15 @@ conda activate caiman_classifier_env
 python classifier/scripts/extract_features.py --plane .../Segmentation_caImAn_002/26-03-12-OLL/RB01/plane0
 cat $OUT/features/26-03-12-OLL_RB01_plane0.checks.json   # mask_dice ~1, dff_corr ~1, order "C"
 
-# 2. Features for the 46 training planes (one array task per plane, ~1-2 min each)
-sbatch --array=0-45 classifier/slurm/extract_features.sbatch --training
+# 2. Features for the 45 training planes (one array task per plane, ~1-2 min each)
+sbatch --array=0-44 classifier/slurm/extract_features.sbatch --training
 
 # 3. Train: nested CV for all models, leave-one-animal-out, ablation, final models (a few hours)
 sbatch classifier/slurm/train.sbatch --version $V
 #    -> $OUT/reports/$V/report.md, cv_summary.csv, plots;  $OUT/models/$V/{dev,deploy}
 
 # 3b. Optional: movie features (G9), then train again with them
-sbatch --array=0-45 classifier/slurm/movie_features.sbatch --training
+sbatch --array=0-44 classifier/slurm/movie_features.sbatch --training
 sbatch classifier/slurm/train.sbatch --version ${V}_movie --with-movie
 #    keep full_movie only if it beats full in cv_summary.csv / ablation_summary.csv;
 #    to deploy it: train.sbatch --version ${V}_movie --final-set full_movie --stages final
@@ -88,8 +88,9 @@ the plane folder before and after writing, and fails if anything other than the 
 
 ## Labels and planes
 
-- 46 training planes (`config.yaml`). Two dates differ from the original request: RB05 plane0 26-03-29 →
-  26-03-21 (no RB05 folder on 26-03-29) and RB07 plane0 26-03-26 → 26-03-24 (26-03-26 has no labels).
+- 45 training planes (`config.yaml`). Differences from the original request: RB05 plane0 26-03-29 → 26-03-21
+  (no RB05 folder on 26-03-29). RB07 plane0 26-03-26 has no labels and 26-03-24 is only partly labelled (23 of
+  157 cells), so RB07 plane0 has neither.
 - A = 1, R = 0. Blank (unreviewed) and F labels are excluded, not treated as Reject. `label_summary_*.csv`
   counts them per plane.
 - Candidates are every CaImAn-accepted component (`idx_components`), which is the pool the reader shows.
@@ -126,14 +127,15 @@ training plane is its own FOV). They are used only by the `replica` baseline.
 
 - **Nested leave-one-plane-out CV** on the 40 dev planes. For each held-out plane, the inner 5-fold GroupKFold
   by plane picks the XGBoost settings (grid in `config.yaml`), the number of trees (minimum of the mean inner
-  log-loss curve) and the **decision threshold that maximises balanced accuracy**. All of these come from the
+  log-loss curve) and the **decision threshold that maximises Cohen's κ** (`threshold_objective`; balanced
+  accuracy put it at ~0.21 and accepted ~44% more cells than the manual labels). All of these come from the
   inner folds only.
 - **Models compared:** `always_reject`, `snr_logistic`, `logistic_all`, `replica` (the previous student's
   features and settings, threshold 0.5), `full` (G1–G8, tuned), and `full_movie`.
 - **Leave-one-animal-out** for `replica` and the final feature set shows how well it transfers to a new animal.
 - **Ablation:** `full` minus each group, with `delta_*` columns relative to `full`.
 - **Final:** tuned and fitted on the 40 dev planes (`models/<v>/dev`, scored once on the locked test set by
-  `evaluate.py --locked-test`), then refit with the same settings on all 46 planes (`models/<v>/deploy`, used by
+  `evaluate.py --locked-test`), then refit with the same settings on all 45 planes (`models/<v>/deploy`, used by
   `apply.py`). Feature importance is the mean |SHAP|.
 
 **Metrics** (pooled per cell, and per-plane mean ± SD). Only ~25% of cells are accepted, so "always reject"
