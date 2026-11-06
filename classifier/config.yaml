@@ -66,8 +66,9 @@ movie_features:
 registration:
   enhance_sigma_px: 12        # high-pass / local contrast scale (~half a cell diameter)
   rigid_max_shift_px: 80
-  max_angle_deg: 3.0          # rotation search -3..3 deg ...
-  angle_step_deg: 0.5         # ... in 0.5 deg steps, then a finer search around the best
+  max_angle_deg: 12.0         # rotation search -12..12 deg (sessions differ by 7 deg or more) ...
+  angle_step_deg: 1.0         # ... in 1 deg steps, then two finer searches around the best
+  neighbor_sessions: 3        # each session is registered directly to the next 3 by date
   block_px: 128               # nonrigid: phase correlation in 128 px blocks ...
   block_overlap: 0.5          # ... overlapping by half (7 x 7 blocks on 512 px)
   nonrigid_max_shift_px: 12
@@ -75,12 +76,12 @@ registration:
   field_smooth_blocks: 0.5
   nonrigid_iterations: 3
   match_radius_px: 10         # QC: mutual-nearest accepted-cell centroids within this
+  match_close_px: 3.0         # QC: "same place" for the beyond-chance match count
   qc_border_px: 50            # QC image correlation ignores the border (CaImAn border_pix)
   qc_zoom_px: 160
-  pass:                       # a session fails QC (gate 1) if any of these is missed
-    min_img_corr: 0.2
-    max_median_dist_px: 3.0
-    min_frac_matched: 0.3
+  pass:                       # a registration fails QC (gate 1) if either is missed. Provisional,
+    min_img_corr: 0.5         #   from RB01 plane0: well registered neighbours ~0.8, failures <= 0.3
+    min_match_excess: 0.05    # cells within 3 px minus chance; ~0.10 when aligned, ~0.01 when not
 
 model:
   # Inner-CV grid for the tuned XGBoost models

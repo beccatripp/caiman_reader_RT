@@ -50,7 +50,7 @@ def interior_points(n=400, seed=2):
 
 def register(ref, mov):
     ref_e, mov_e = reg.enhance(ref, 12), reg.enhance(mov, 12)
-    rigid, _ = reg.rigid_register(ref_e, mov_e, max_shift=80, max_angle_deg=3, angle_step_deg=0.5)
+    rigid, _ = reg.rigid_register(ref_e, mov_e, max_shift=80, max_angle_deg=12, angle_step_deg=1.0)
     nonrigid, info = reg.nonrigid_register(ref_e, rigid, mov_e, block=128, overlap=0.5, max_shift=12,
                                            min_strength=6, smooth_blocks=0.5)
     return rigid, nonrigid, info
@@ -73,6 +73,17 @@ def test_rigid_only():
     # theta belongs to the pull map (reference -> session): the inverse rotation
     assert abs(np.rad2deg(rigid.theta) + 1.5) < 0.1, np.rad2deg(rigid.theta)
     assert np.median(err) < 0.3 and err.max() < 0.8, (np.median(err), err.max())
+
+
+def test_large_rotation():
+    """Day-to-day rotations of ~7 deg and 30+ px shifts occur in the OLL data."""
+    ref = scene()
+    mov = make_session(ref, theta_deg=-7.0, t=(-20.6, 33.9), amp=0.0)
+    rigid, _, _ = register(ref, mov)
+    u = interior_points()
+    err = np.hypot(*(rigid.push(u) - h_true(u, theta_deg=-7.0, t=(-20.6, 33.9), amp=0.0)).T)
+    assert abs(np.rad2deg(rigid.theta) - 7.0) < 0.1, np.rad2deg(rigid.theta)
+    assert np.median(err) < 0.3, np.median(err)
 
 
 def test_nonrigid_recovers_warp():
@@ -98,9 +109,9 @@ def test_centroid_qc_and_roundtrip():
     _, nonrigid, _ = register(ref, mov)
     u = interior_points()                                   # session centroids
     q = reg.centroid_qc(h_true(u), u, nonrigid, radius=10)
-    assert q["frac_matched"] > 0.95 and q["median_dist"] < 0.5, q
+    assert q["frac_close"] > 0.95 and q["median_dist"] < 0.5 and q["match_excess"] > 0.8, q
     ident = reg.centroid_qc(h_true(u), u, reg.Transform((H, W)), radius=10)
-    assert ident["median_dist"] > q["median_dist"]
+    assert ident["match_excess"] < q["match_excess"] - 0.5, ident
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "t.npz")
         nonrigid.save(path, ref_pid="x")

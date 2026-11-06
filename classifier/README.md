@@ -155,31 +155,38 @@ calibration plot, and the per-plane error in the number of accepted cells (absol
 
 ## xgboost-context (in progress): cross-session registration
 
-Stage 1 registers every session of one mouse x plane to a reference session, so later stages can ask whether
-a footprint is also present in nearby sessions, which is evidence that it is a real cell.
+Stage 1 registers sessions of the same mouse x plane to each other, so later stages can ask whether a footprint
+is also present in nearby sessions, which is evidence that it is a real cell.
 `scripts/register_fov.py`, `cmclf/registration.py`; settings under `registration:` in `config.yaml`.
 
 - Images: each session's `ops.npy` `meanImg`, high-pass filtered and contrast normalised.
-- Reference: among the middle half of the sessions by date, the one that correlates best with all the others.
-- Rigid: rotation search (+-3 deg) with phase correlation for the shift. Nonrigid: phase correlation in 128 px
-  blocks overlapping by half, outlier blocks replaced, lightly smoothed, refined 3 times. On synthetic images
-  with a known rotation, shift and smooth warp it recovers the mapping to 0.2 px median, 0.5 px 95th percentile
-  (`tests/test_registration.py`).
-- QC per session, with no registration / rigid / nonrigid: correlation of the enhanced images (border excluded)
-  and mutual-nearest matching of CaImAn-accepted centroids within 10 px (fraction matched, median distance). The
-  nonrigid field is kept only if it doesn't make either worse than rigid. A session **fails** if the image
-  correlation is < 0.2, the median cell distance > 3 px, or < 30% of cells match.
-- ROICaT's existing tracking (`CellTracking_ROICat/`) is not used.
+- Rigid: rotation search (+-12 deg in 1 deg steps, then finer) with phase correlation for the shift. Nonrigid:
+  phase correlation in 128 px blocks overlapping by half, outlier blocks replaced, lightly smoothed, refined 3
+  times. On synthetic images with a known rotation, shift and smooth warp it recovers the mapping to 0.2 px
+  median, 0.5 px 95th percentile, and a 7 deg / 40 px offset exactly (`tests/test_registration.py`).
+- **Pairs, not one reference.** The OLL FOV rotates by up to ~7 deg and shifts by 30+ px between sessions, and
+  drifts over weeks: on RB01 plane0, registering consecutive days directly gave image correlation 0.83, while
+  registering both to a session two weeks earlier gave 0.3-0.5. So each session is registered directly to its
+  next 3 sessions by date (`pairs/`), which is what the context features need. All sessions are also registered
+  to one reference (`ref/`), but only for the overview image.
+- QC per registration, with no registration / rigid / nonrigid: correlation of the enhanced images (border
+  excluded), and the fraction of CaImAn-accepted centroids within 3 px of one in the other session **minus
+  chance** (the same fraction after a 40 px offset). Most accepted components aren't cells and needn't reappear,
+  so the raw fraction is low even when aligned. Nonrigid is kept only if it makes neither worse than rigid. A
+  registration **fails** if the correlation is < 0.5 or the beyond-chance match is < 0.05 (provisional).
+- ROICaT's existing tracking (`CellTracking_ROICat/`) is not used. `registration/v1` (single reference, +-3 deg)
+  was superseded by `v2`.
 
 ```bash
-python classifier/scripts/register_fov.py --list                 # groups and their array index
-sbatch --array=0-11 classifier/slurm/register.sbatch            # one mouse x plane per task, -> registration/v1/
+python classifier/scripts/register_fov.py --list                   # groups and their array index
+sbatch --array=0-11 classifier/slurm/register.sbatch --run v2     # one mouse x plane per task, ~20-30 min
 ```
 
-Output per group, `$OUT/registration/<run>/<mouse>_<plane>/`: `<pid>.npz` (transform: reference -> session pull
-map, see `cmclf/registration.Transform`), `qc.csv`, `summary.json`, `overlays_*.png` (reference magenta, session
-green; aligned structure is white), `qc_metrics.png`, `stack.png` (reference vs the average of the passing
-sessions: a sharp average means the sessions line up). An existing group folder is never overwritten (`--run`).
+Output per group, `$OUT/registration/<run>/<mouse>_<plane>/`: `pairs/<pidA>__<pidB>.npz` and `ref/<pid>.npz`
+(transforms, A-space -> B-space pull maps, see `cmclf/registration.Transform`), `pairs.csv`, `ref.csv`,
+`summary.json`, `pairs_overlays_*.png` (consecutive sessions, earlier magenta and later green; aligned
+structure is white), `pairs_qc.png` (QC against date), `stack.png` (reference vs the average of the sessions
+that pass against it). An existing group folder is never overwritten (`--run`).
 **Gate 1:** look at these before anything uses the transforms.
 
 ## Layout

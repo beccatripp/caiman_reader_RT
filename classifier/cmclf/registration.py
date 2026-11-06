@@ -165,7 +165,9 @@ def rotate_pull(img, theta):
 
 
 def rigid_register(ref_e, mov_e, max_shift, max_angle_deg, angle_step_deg):
-    """Coarse angle grid, then a finer one around the best angle."""
+    """Coarse angle grid, then two finer ones around the best angle (to about
+    angle_step / 16). OLL sessions can be rotated by 7 deg or more relative to
+    each other, so the search range has to be wide."""
     win = tukey2d(ref_e.shape)
     b = ref_e * win
 
@@ -176,10 +178,11 @@ def rigid_register(ref_e, mov_e, max_shift, max_angle_deg, angle_step_deg):
     coarse = np.deg2rad(np.arange(-max_angle_deg, max_angle_deg + 1e-9, angle_step_deg)) if max_angle_deg > 0 \
         else np.zeros(1)
     best = max((at(t) for t in coarse), key=lambda r: r[0])
-    if max_angle_deg > 0:
-        step = np.deg2rad(angle_step_deg)
+    step = np.deg2rad(angle_step_deg)
+    for _ in range(2 if max_angle_deg > 0 else 0):
         fine = best[1] + np.linspace(-step, step, 9)
         best = max([best] + [at(t) for t in fine], key=lambda r: r[0])
+        step /= 4
     strength, theta, s = best
     return Transform(ref_e.shape, theta, s), strength
 
@@ -281,9 +284,25 @@ def mutual_nearest(ref_pts, pts, radius):
     return i[keep], j[keep], d1[keep]
 
 
-def centroid_qc(ref_pts, sess_pts, transform, radius):
-    """Session centroids pushed into reference space, matched to the reference's."""
-    _, _, d = mutual_nearest(ref_pts, transform.push(sess_pts) if len(sess_pts) else sess_pts, radius)
-    n = min(len(ref_pts), len(sess_pts))
-    return dict(n_pairs=int(len(d)), frac_matched=float(len(d) / n) if n else np.nan,
+NULL_OFFSETS = np.array([[40, 0], [-40, 0], [0, 40], [0, -40]], float)
+
+
+def centroid_qc(ref_pts, sess_pts, transform, radius, close_px=3.0):
+    """Session centroids pushed into reference space and compared with the
+    reference's. Most CaImAn-accepted components are not cells and need not
+    reappear, so the raw fraction matched is low even when the alignment is
+    right; compare it with chance instead:
+      frac_close   fraction of session cells within close_px of a reference cell
+      null_close   the same after offsetting the pushed points by 40 px (4
+                   directions, averaged): what chance alone gives
+      match_excess frac_close - null_close (about 0 when misaligned)
+      median_dist  median distance of mutual-nearest pairs within radius"""
+    if len(ref_pts) == 0 or len(sess_pts) == 0:
+        return dict(frac_close=np.nan, null_close=np.nan, match_excess=np.nan, n_pairs=0, median_dist=np.nan)
+    pts = transform.push(sess_pts)
+    tree = cKDTree(ref_pts)
+    frac = float(np.mean(tree.query(pts)[0] < close_px))
+    null = float(np.mean([np.mean(tree.query(pts + o)[0] < close_px) for o in NULL_OFFSETS]))
+    _, _, d = mutual_nearest(ref_pts, pts, radius)
+    return dict(frac_close=frac, null_close=null, match_excess=frac - null, n_pairs=int(len(d)),
                 median_dist=float(np.median(d)) if len(d) else np.nan)

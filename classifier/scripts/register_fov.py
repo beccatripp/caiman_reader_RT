@@ -1,25 +1,37 @@
 #!/usr/bin/env python
-"""Register every session of one mouse x plane to a reference session
-(xgboost-context, stage 1). Images: each session's ops.npy meanImg, contrast
-enhanced (cmclf/registration.py). Nothing downstream uses a transform until its
-QC has been looked at.
+"""Cross-session registration for one mouse x plane (xgboost-context, stage 1).
+Images: each session's ops.npy meanImg, contrast enhanced (cmclf/registration.py).
+Nothing downstream uses a transform until its QC has been looked at.
 
-Groups are the (mouse, plane) pairs under data_root; --list prints them with
-their array index. Output, <output_root>/registration/<run>/<mouse>_<plane>/:
-  <pid>.npz         transform (reference -> session pull map) + mode, ref_pid
-  qc.csv            per session: rotation, shift, largest nonrigid displacement;
-                    image correlation and accepted-cell centroid matching for no
-                    registration / rigid / nonrigid; the mode kept; pass flags
-  summary.json      reference choice, parameters, git commit
-  overlays_<k>.png  reference (magenta) vs registered session (green): full FOV
-                    and a centre zoom; aligned structure looks white
-  qc_metrics.png    QC against session date
-  stack.png         reference vs the average of all passing registered sessions
+Two kinds of registration:
+- Pairs (what the context features use): each session registered directly to
+  the next `neighbor_sessions` sessions by date. Nearby days look alike, while
+  the FOV drifts and rotates (7 deg or more) over weeks, so a single distant
+  reference registers poorly.
+- Reference (overview only): every session to one reference session, for the
+  sharpness of the average image in stack.png.
+
+QC per registration, for no registration / rigid / nonrigid: correlation of the
+enhanced images (border excluded), and how many CaImAn-accepted centroids land
+within 3 px of one in the other session *beyond chance* (match_excess: the same
+count after a 40 px offset is subtracted; most accepted components aren't cells,
+so the raw fraction is low even when aligned). Nonrigid is kept only if it makes
+neither worse than rigid.
+
+Output, <output_root>/registration/<run>/<mouse>_<plane>/:
+  pairs/<pidA>__<pidB>.npz  transform, A-space -> B-space pull map (see Transform)
+  pairs.csv                 one row per pair: rotation, shift, QC, mode, pass
+  ref/<pid>.npz, ref.csv    the same for the reference registrations
+  summary.json              reference, parameters, git commit, failing pairs
+  pairs_overlays_<k>.png    consecutive sessions: earlier (magenta) vs later
+                            (green) registered to it; full FOV + centre zoom
+  pairs_qc.png              pair QC against date, consecutive and longer gaps
+  stack.png                 reference vs the average of the passing sessions
 An existing group folder is never overwritten: pick a new --run.
 
   python register_fov.py --list
-  python register_fov.py --mouse RB06 --plane plane0
-  sbatch --array=0-11 slurm/register.sbatch        (one group per array task)
+  python register_fov.py --mouse RB06 --plane plane0 --run v2
+  sbatch --array=0-11 slurm/register.sbatch --run v2      (one group per task)
 """
 import argparse
 import json
@@ -38,6 +50,8 @@ from cmclf import io, jobs
 from cmclf import registration as reg
 from cmclf.features import footprint_geometry
 
+MODES = ("raw", "rigid", "nonrigid", "final")
+
 
 def groups(cfg):
     return sorted({(p["mouse"], p["plane"]) for p in io.discover_planes(cfg["data_root"])})
@@ -49,53 +63,60 @@ def load_session(p, cfg, rcfg):
         return None
     geom = footprint_geometry(plane, cfg["features"]["mask_threshold"])
     cent = np.stack([geom["cy"], geom["cx"]], axis=1)[plane.idx]
-    return dict(pid=p["pid"], session=p["session"], dims=plane.dims, img=plane.mean_img,
+    return dict(pid=p["pid"], session=p["session"], dims=plane.dims,
                 enh=reg.enhance(plane.mean_img, rcfg["enhance_sigma_px"]), cent=cent)
 
 
 def choose_reference(sess, rcfg):
     """Among the middle half of the sessions by date, the one whose image
-    correlates best (median phase-correlation peak) with all the others."""
+    correlates best (median phase-correlation peak, rigid with rotation) with
+    the sessions around it."""
     n = len(sess)
     lo, hi = n // 4, max(n - n // 4, n // 4 + 1)
-    win = reg.tukey2d(sess[0]["enh"].shape)
     scores = {}
     for i in range(lo, hi):
-        b = sess[i]["enh"] * win
-        s = [reg.phase_corr(sess[j]["enh"] * win, b, rcfg["rigid_max_shift_px"])[1] for j in range(n) if j != i]
+        others = [j for j in range(max(0, i - 3), min(n, i + 4)) if j != i]
+        s = [reg.rigid_register(sess[i]["enh"], sess[j]["enh"], rcfg["rigid_max_shift_px"],
+                                rcfg["max_angle_deg"], 2 * rcfg["angle_step_deg"])[1] for j in others]
         scores[sess[i]["pid"]] = float(np.median(s)) if s else 0.0
     return max(scores, key=scores.get), scores
 
 
-def evaluate(ref, s, t, rcfg):
-    q = reg.centroid_qc(ref["cent"], s["cent"], t, rcfg["match_radius_px"])
-    return dict(corr=reg.image_corr(ref["enh"], t.warp_image(s["enh"]), rcfg["qc_border_px"]), **q)
+def evaluate(a, b, t, rcfg):
+    """a is the space registered into; t pulls a-space points into b."""
+    q = reg.centroid_qc(a["cent"], b["cent"], t, rcfg["match_radius_px"], rcfg["match_close_px"])
+    return dict(corr=reg.image_corr(a["enh"], t.warp_image(b["enh"]), rcfg["qc_border_px"]), **q)
 
 
-def register_session(ref, s, rcfg):
-    ident = reg.Transform(ref["dims"])
-    if s["pid"] == ref["pid"]:
-        q = evaluate(ref, s, ident, rcfg)
-        return ident, dict(mode="reference", nonrigid_status="", n_valid_blocks=np.nan,
-                           **{f"{k}_{m}": v for m in ("raw", "rigid", "nonrigid", "final") for k, v in q.items()})
-    rigid, strength = reg.rigid_register(ref["enh"], s["enh"], rcfg["rigid_max_shift_px"],
+def register_pair(a, b, rcfg):
+    """Register b onto a. Returns (Transform a -> b, QC row)."""
+    ident = reg.Transform(a["dims"])
+    rigid, strength = reg.rigid_register(a["enh"], b["enh"], rcfg["rigid_max_shift_px"],
                                          rcfg["max_angle_deg"], rcfg["angle_step_deg"])
-    nonrigid, info = reg.nonrigid_register(ref["enh"], rigid, s["enh"], rcfg["block_px"], rcfg["block_overlap"],
+    nonrigid, info = reg.nonrigid_register(a["enh"], rigid, b["enh"], rcfg["block_px"], rcfg["block_overlap"],
                                            rcfg["nonrigid_max_shift_px"], rcfg["min_block_strength"],
                                            rcfg["field_smooth_blocks"], n_iter=rcfg["nonrigid_iterations"])
-    q = {"raw": evaluate(ref, s, ident, rcfg), "rigid": evaluate(ref, s, rigid, rcfg)}
-    q["nonrigid"] = evaluate(ref, s, nonrigid, rcfg) if nonrigid.is_nonrigid else dict(q["rigid"])
-    # Keep the nonrigid field only if it doesn't make the cell matching or the
-    # image correlation worse than rigid alone
+    q = {"raw": evaluate(a, b, ident, rcfg), "rigid": evaluate(a, b, rigid, rcfg)}
+    q["nonrigid"] = evaluate(a, b, nonrigid, rcfg) if nonrigid.is_nonrigid else dict(q["rigid"])
     better = (nonrigid.is_nonrigid
-              and not (q["nonrigid"]["median_dist"] > q["rigid"]["median_dist"] + 0.25)
+              and q["nonrigid"]["match_excess"] >= q["rigid"]["match_excess"] - 0.01
               and q["nonrigid"]["corr"] >= q["rigid"]["corr"] - 0.01)
-    final, mode = (nonrigid, "nonrigid") if better else (rigid, "rigid")
+    final = nonrigid if better else rigid
     q["final"] = q["nonrigid"] if better else q["rigid"]
-    row = dict(mode=mode, nonrigid_status=info.get("nonrigid", ""), n_valid_blocks=info.get("n_valid_blocks"),
-               rigid_peak_strength=strength,
-               **{f"{k}_{m}": v for m, d in q.items() for k, v in d.items()})
+    p = rcfg["pass"]
+    row = dict(theta_deg=np.rad2deg(final.theta), shift_y=final.shift[0], shift_x=final.shift[1],
+               max_field_px=final.max_field(), mode="nonrigid" if better else "rigid",
+               nonrigid_status=info.get("nonrigid", ""), n_valid_blocks=info.get("n_valid_blocks"),
+               rigid_peak_strength=strength, **{f"{k}_{m}": v for m in MODES for k, v in q[m].items()})
+    row["pass"] = bool(row["corr_final"] >= p["min_img_corr"] and row["match_excess_final"] >= p["min_match_excess"])
     return final, row
+
+
+def describe(row):
+    return (f"{row['mode']:8s} rot {row['theta_deg']:+6.2f} deg  shift ({row['shift_y']:+6.1f}, {row['shift_x']:+6.1f})  "
+            f"corr {row['corr_raw']:.2f}->{row['corr_final']:.2f}  cells within 3 px "
+            f"{100 * row['frac_close_final']:.0f}% (chance {100 * row['null_close_final']:.0f}%)  "
+            f"{'ok' if row['pass'] else 'FAIL'}")
 
 
 # ── Figures ──────────────────────────────────────────────────────────────────
@@ -104,76 +125,71 @@ def to_unit(e):
     return np.clip((np.nan_to_num(e) + 1.5) / 4.5, 0, 1)
 
 
-def overlay(ref_e, warped_e):
-    r, g = to_unit(ref_e), to_unit(warped_e)
-    return np.stack([r, g, r], axis=-1)
-
-
-def plot_overlays(ref, sess, transforms, qc, out_dir, zoom):
+def plot_pair_overlays(sess, consecutive, out_dir, zoom):
+    """consecutive: list of (i, j, transform, row) for j = i + 1."""
     per_page = 8
-    H, W = ref["dims"]
+    H, W = sess[0]["dims"]
     zoom = min(zoom, H, W)
     y0, x0 = (H - zoom) // 2, (W - zoom) // 2
-    for k in range(0, len(sess), per_page):
-        chunk = list(range(k, min(k + per_page, len(sess))))
+    for k in range(0, len(consecutive), per_page):
+        chunk = consecutive[k:k + per_page]
         fig, axes = plt.subplots(len(chunk), 2, figsize=(8, 4 * len(chunk)), squeeze=False)
-        for row, i in enumerate(chunk):
-            s, r = sess[i], qc.iloc[i]
-            rgb = overlay(ref["enh"], transforms[i].warp_image(s["enh"]))
-            axes[row, 0].imshow(rgb)
-            axes[row, 0].add_patch(plt.Rectangle((x0, y0), zoom, zoom, fill=False, ec="yellow", lw=0.8))
-            axes[row, 1].imshow(rgb[y0:y0 + zoom, x0:x0 + zoom])
-            flag = "" if r["pass"] else "  FAIL"
-            axes[row, 0].set_title(f"{s['session']}  {r['mode']}{flag}", fontsize=9,
-                                   color="red" if not r["pass"] else "black")
-            axes[row, 1].set_title(f"corr {r['corr_final']:.2f}  cells {r['median_dist_final']:.1f} px  "
-                                   f"{100 * r['frac_matched_final']:.0f}% matched", fontsize=8)
-            for ax in axes[row]:
+        for row_i, (i, j, t, r) in enumerate(chunk):
+            a = to_unit(sess[i]["enh"])
+            rgb = np.stack([a, to_unit(t.warp_image(sess[j]["enh"])), a], axis=-1)
+            axes[row_i, 0].imshow(rgb)
+            axes[row_i, 0].add_patch(plt.Rectangle((x0, y0), zoom, zoom, fill=False, ec="yellow", lw=0.8))
+            axes[row_i, 1].imshow(rgb[y0:y0 + zoom, x0:x0 + zoom])
+            axes[row_i, 0].set_title(f"{sess[i]['session']} (magenta) vs {sess[j]['session']} (green)"
+                                     f"{'' if r['pass'] else '  FAIL'}", fontsize=8,
+                                     color="black" if r["pass"] else "red")
+            axes[row_i, 1].set_title(f"{r['mode']}, rot {r['theta_deg']:+.1f} deg, corr {r['corr_final']:.2f}, "
+                                     f"cells {100 * r['frac_close_final']:.0f}% vs {100 * r['null_close_final']:.0f}%",
+                                     fontsize=8)
+            for ax in axes[row_i]:
                 ax.set_axis_off()
-        fig.suptitle(f"reference {ref['session']} (magenta) vs session (green)", fontsize=10)
         fig.tight_layout()
-        fig.savefig(os.path.join(out_dir, f"overlays_{k // per_page + 1:02d}.png"), dpi=90)
+        fig.savefig(os.path.join(out_dir, f"pairs_overlays_{k // per_page + 1:02d}.png"), dpi=90)
         plt.close(fig)
 
 
-def plot_qc(qc, rcfg, out_dir, title):
-    x = np.arange(len(qc))
-    fig, axes = plt.subplots(3, 1, figsize=(max(8, 0.3 * len(qc)), 9), sharex=True)
-    for m, st in (("raw", ":"), ("rigid", "--"), ("final", "-")):
-        axes[0].plot(x, qc[f"corr_{m}"], st, marker=".", label=m)
-        axes[1].plot(x, qc[f"median_dist_{m}"], st, marker=".", label=m)
-        axes[2].plot(x, qc[f"frac_matched_{m}"], st, marker=".", label=m)
-    p = rcfg["pass"]
-    axes[0].axhline(p["min_img_corr"], color="r", lw=0.8)
-    axes[1].axhline(p["max_median_dist_px"], color="r", lw=0.8)
-    axes[2].axhline(p["min_frac_matched"], color="r", lw=0.8)
+def plot_pairs_qc(pairs, sessions, rcfg, out_dir, title):
+    idx = {s: i for i, s in enumerate(sessions)}
+    pairs = pairs.assign(i=pairs["session_a"].map(idx), gap=pairs["session_b"].map(idx) - pairs["session_a"].map(idx))
+    fig, axes = plt.subplots(3, 1, figsize=(max(8, 0.3 * len(sessions)), 9), sharex=True)
+    for gap, g in pairs.groupby("gap"):
+        axes[0].plot(g["i"], g["corr_final"], marker=".", label=f"+{gap} session{'s' if gap > 1 else ''}")
+        axes[1].plot(g["i"], g["match_excess_final"], marker=".")
+        axes[2].plot(g["i"], g["theta_deg"], marker=".")
+    consecutive = pairs[pairs["gap"] == 1]
+    axes[0].plot(consecutive["i"], consecutive["corr_raw"], ":", color="gray", label="+1, unregistered")
+    axes[0].axhline(rcfg["pass"]["min_img_corr"], color="r", lw=0.8)
+    axes[1].axhline(rcfg["pass"]["min_match_excess"], color="r", lw=0.8)
     axes[0].set_ylabel("image corr")
-    axes[1].set_ylabel("median cell distance (px)")
-    axes[2].set_ylabel("fraction of cells matched")
-    for ax in axes:
-        for i in np.flatnonzero(~qc["pass"].to_numpy()):
-            ax.axvspan(i - 0.4, i + 0.4, color="r", alpha=0.12)
-        ref_i = np.flatnonzero(qc["mode"].to_numpy() == "reference")
-        for i in ref_i:
-            ax.axvline(i, color="k", lw=0.6)
-    axes[0].legend(fontsize=8)
-    axes[2].set_xticks(x)
-    axes[2].set_xticklabels(qc["session"], rotation=90, fontsize=7)
-    fig.suptitle(title)
+    axes[1].set_ylabel("cells within 3 px\nminus chance")
+    axes[2].set_ylabel("rotation (deg)")
+    axes[0].legend(fontsize=7)
+    for i in sorted(set(pairs.loc[~pairs["pass"], "i"])):
+        for ax in axes:
+            ax.axvspan(i - 0.4, i + 0.4, color="r", alpha=0.08)
+    axes[2].set_xticks(range(len(sessions)))
+    axes[2].set_xticklabels(sessions, rotation=90, fontsize=7)
+    fig.suptitle(title + "  (x: the earlier session of each pair)")
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "qc_metrics.png"), dpi=90)
+    fig.savefig(os.path.join(out_dir, "pairs_qc.png"), dpi=90)
     plt.close(fig)
 
 
-def plot_stack(ref, sess, transforms, qc, out_dir, zoom):
-    keep = [i for i in range(len(sess)) if qc.iloc[i]["pass"]]
-    stack = np.nanmean([transforms[i].warp_image(sess[i]["enh"]) for i in keep], axis=0)
+def plot_stack(ref, sess, transforms, refqc, out_dir, zoom):
+    keep = [i for i in range(len(sess)) if refqc.iloc[i]["pass"]]
     H, W = ref["dims"]
     zoom = min(zoom, H, W)
     y0, x0 = (H - zoom) // 2, (W - zoom) // 2
+    stack = (np.nanmean([transforms[i].warp_image(sess[i]["enh"]) for i in keep], axis=0) if keep
+             else np.zeros((H, W)))
     fig, axes = plt.subplots(2, 2, figsize=(9, 9))
     for col, (img, name) in enumerate(((ref["enh"], f"reference {ref['session']}"),
-                                       (stack, f"average of {len(keep)} passing sessions"))):
+                                       (stack, f"average of {len(keep)} sessions passing vs the reference"))):
         axes[0, col].imshow(to_unit(img), cmap="gray")
         axes[0, col].set_title(name, fontsize=9)
         axes[1, col].imshow(to_unit(img)[y0:y0 + zoom, x0:x0 + zoom], cmap="gray")
@@ -192,7 +208,7 @@ def main():
     ap.add_argument("--mouse")
     ap.add_argument("--plane")
     ap.add_argument("--task-id", type=int, help="group index (default $SLURM_ARRAY_TASK_ID)")
-    ap.add_argument("--run", default="v1", help="output subfolder under registration/")
+    ap.add_argument("--run", default="v2", help="output subfolder under registration/")
     ap.add_argument("--config")
     a = ap.parse_args()
     cfg = io.load_config(a.config)
@@ -238,41 +254,64 @@ def main():
         sys.exit("fewer than 2 usable sessions")
     print(f"  loaded {len(sess)} sessions in {time.time() - t0:.0f} s; skipped {skipped}")
 
+    # Pairs: each session onto the next k
+    k = rcfg["neighbor_sessions"]
+    pair_rows, consecutive, pair_t = [], [], []
+    for i in range(len(sess)):
+        for j in range(i + 1, min(i + 1 + k, len(sess))):
+            t, row = register_pair(sess[i], sess[j], rcfg)
+            row = dict(pid_a=sess[i]["pid"], pid_b=sess[j]["pid"], session_a=sess[i]["session"],
+                       session_b=sess[j]["session"], gap=j - i, n_cells_a=len(sess[i]["cent"]),
+                       n_cells_b=len(sess[j]["cent"]), **row)
+            pair_rows.append(row)
+            pair_t.append(t)
+            if j == i + 1:
+                consecutive.append((i, j, t, row))
+            print(f"  {sess[i]['session']} <- {sess[j]['session']}: {describe(row)}")
+    pairs = pd.DataFrame(pair_rows)
+
+    # Reference registration, for the overview
     ref_pid, ref_scores = choose_reference(sess, rcfg)
     ref = next(s for s in sess if s["pid"] == ref_pid)
     print(f"  reference {ref_pid}")
-
-    rows, transforms = [], []
-    p = rcfg["pass"]
+    ref_rows, ref_t = [], []
     for s in sess:
-        t, row = register_session(ref, s, rcfg)
-        row = dict(pid=s["pid"], session=s["session"], n_cells=len(s["cent"]), theta_deg=np.rad2deg(t.theta),
-                   shift_y=t.shift[0], shift_x=t.shift[1], max_field_px=t.max_field(), **row)
-        row["pass"] = bool(row["corr_final"] >= p["min_img_corr"]
-                           and row["median_dist_final"] <= p["max_median_dist_px"]
-                           and row["frac_matched_final"] >= p["min_frac_matched"])
-        rows.append(row)
-        transforms.append(t)
-        print(f"  {s['pid']}: {row['mode']:9s} rot {row['theta_deg']:+.2f} deg  shift ({row['shift_y']:+.1f}, "
-              f"{row['shift_x']:+.1f})  corr {row['corr_raw']:.2f}->{row['corr_final']:.2f}  cells "
-              f"{row['median_dist_raw']:.1f}->{row['median_dist_final']:.1f} px, "
-              f"{100 * row['frac_matched_final']:.0f}% matched  {'ok' if row['pass'] else 'FAIL'}")
-    qc = pd.DataFrame(rows)
+        if s["pid"] == ref_pid:
+            t = reg.Transform(dims)
+            q = evaluate(ref, s, t, rcfg)
+            row = dict(theta_deg=0.0, shift_y=0.0, shift_x=0.0, max_field_px=0.0, mode="reference", pass_=True,
+                       **{f"{k_}_{m}": v for m in MODES for k_, v in q.items()})
+            row["pass"] = row.pop("pass_")
+        else:
+            t, row = register_pair(ref, s, rcfg)
+        ref_rows.append(dict(pid=s["pid"], session=s["session"], **row))
+        ref_t.append(t)
+    refqc = pd.DataFrame(ref_rows)
 
-    os.makedirs(out_dir)
-    for s, t, r in zip(sess, transforms, rows):
-        t.save(os.path.join(out_dir, f"{s['pid']}.npz"), ref_pid=ref_pid, mode=r["mode"], pid=s["pid"])
-    qc.to_csv(os.path.join(out_dir, "qc.csv"), index=False)
+    os.makedirs(os.path.join(out_dir, "pairs"))
+    os.makedirs(os.path.join(out_dir, "ref"))
+    for r, t in zip(pair_rows, pair_t):
+        t.save(os.path.join(out_dir, "pairs", f"{r['pid_a']}__{r['pid_b']}.npz"), pid_a=r["pid_a"], pid_b=r["pid_b"],
+               mode=r["mode"])
+    for r, t in zip(ref_rows, ref_t):
+        t.save(os.path.join(out_dir, "ref", f"{r['pid']}.npz"), ref_pid=ref_pid, pid=r["pid"], mode=r["mode"])
+    pairs.to_csv(os.path.join(out_dir, "pairs.csv"), index=False)
+    refqc.to_csv(os.path.join(out_dir, "ref.csv"), index=False)
     with open(os.path.join(out_dir, "summary.json"), "w") as f:
-        json.dump(dict(mouse=mouse, plane=plane, run=a.run, reference=ref_pid, reference_scores=ref_scores,
-                       n_sessions=len(sess), n_pass=int(qc["pass"].sum()), skipped=skipped,
-                       failed=qc.loc[~qc["pass"], "pid"].tolist(), params=rcfg, git_commit=io.git_commit()),
-                  f, indent=2)
+        json.dump(dict(mouse=mouse, plane=plane, run=a.run, n_sessions=len(sess), skipped=skipped,
+                       n_pairs=len(pairs), n_pairs_pass=int(pairs["pass"].sum()),
+                       consecutive_pass=f"{int(pairs.loc[pairs['gap'] == 1, 'pass'].sum())}/"
+                                        f"{int((pairs['gap'] == 1).sum())}",
+                       failed_pairs=pairs.loc[~pairs["pass"], ["session_a", "session_b"]].values.tolist(),
+                       reference=ref_pid, reference_scores=ref_scores, n_ref_pass=int(refqc["pass"].sum()),
+                       params=rcfg, git_commit=io.git_commit()), f, indent=2, default=str)
     zoom = rcfg["qc_zoom_px"]
-    plot_overlays(ref, sess, transforms, qc, out_dir, zoom)
-    plot_qc(qc, rcfg, out_dir, f"{mouse} {plane}: registration to {ref['session']}")
-    plot_stack(ref, sess, transforms, qc, out_dir, zoom)
-    print(f"  {int(qc['pass'].sum())}/{len(qc)} sessions pass; {time.time() - t0:.0f} s -> {out_dir}")
+    plot_pair_overlays(sess, consecutive, out_dir, zoom)
+    plot_pairs_qc(pairs, [s["session"] for s in sess], rcfg, out_dir, f"{mouse} {plane}: pairwise registration")
+    plot_stack(ref, sess, ref_t, refqc, out_dir, zoom)
+    print(f"  pairs: {int(pairs['pass'].sum())}/{len(pairs)} pass "
+          f"(consecutive {int(pairs.loc[pairs['gap'] == 1, 'pass'].sum())}/{int((pairs['gap'] == 1).sum())}); "
+          f"vs reference {int(refqc['pass'].sum())}/{len(refqc)}; {time.time() - t0:.0f} s -> {out_dir}")
 
 
 if __name__ == "__main__":
