@@ -17,12 +17,14 @@ from scipy.sparse import csc_matrix
 HDF5_NAME = "results.hdf5"
 MANUAL_CSV = "results_quality.csv"
 MODEL_CSV_PREFIX = "results_quality_model_"
+USER_EDITS_SUFFIX = "_useredits"  # must match caiman-reader.py
 
 
 def model_csv_name(tag):
     """results_quality_model_<tag>.csv: one file per model family (xgboost,
-    xgboost-context, ...), so several models' labels can sit in one plane folder."""
-    if not tag or "__" in tag or any(c in tag for c in "/\\ "):
+    xgboost-context, ...), so several models' labels can sit in one plane folder.
+    caiman-reader saves corrections to results_quality_model_<tag>_useredits.csv."""
+    if not tag or "__" in tag or tag.endswith(USER_EDITS_SUFFIX) or any(c in tag for c in "/\\ "):
         raise ValueError(f"bad model tag {tag!r}")
     return f"{MODEL_CSV_PREFIX}{tag}.csv"
 

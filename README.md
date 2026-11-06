@@ -26,11 +26,14 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
   Without `b` / `f` it falls back to `estimates/F_dff`, or (C - F0) / F0 with the 8th percentile of `C`
 - SNR / r-value: from the HDF5, falling back to `quality_scores.npz`
 - Review labels are saved to `results_quality.csv` in the plane folder
-- `--model-labels [TAG]` starts from the auto-QC classifier's `results_quality_model_<TAG>.csv` (e.g.
-  `--model-labels xgboost`; the tag can be left out when the folder has only one model file; see
-  `classifier/README.md`), with any labels already saved in `results_quality.csv` on top. Save still writes only
-  `results_quality.csv`, and also appends a row to the review log (`caiman_classifier_model/review_log.csv`,
-  or `$CMCLF_REVIEW_LOG`): minutes open and how many labels you changed
+- Classifier labels (`results_quality_model_<TAG>.csv`, see `classifier/README.md`) are loaded by default. If the
+  folder has only one label file it is used; if it has several (manual labels, more than one model) a window
+  asks which to start from. The window title shows the file in use. Starting from a model file:
+  - Save writes `results_quality_model_<TAG>_useredits.csv`; the model's own file is never changed
+  - Reopening the plane loads the model file with your `_useredits` labels on top, so you resume where you left off
+  - Each Save appends a row to the review log (`caiman_classifier_model/review_log.csv`, or
+    `$CMCLF_REVIEW_LOG`): minutes open and how many labels you changed
+- `--model-labels TAG` always starts from that model's file; `--no-model-labels` ignores model files (blind review)
 - The movie is sized so the whole window fits the screen (at most 2x)
 - Trace plot: orange = dF/F on the left axis; faint blue = raw (`C + YrA`) and dashed = baseline F0, both
   on the right axis in fluorescence units. Two independent boxes in the plot toolbar:
@@ -57,7 +60,8 @@ conda create -y -n caiman_reader_env python=3.10 numpy scipy matplotlib tifffile
 conda activate caiman_reader_env
 python caiman-reader.py                    # CaImAn-accepted cells
 python caiman-reader.py --overlap-filter   # + filters.ROISet
-python caiman-reader.py --model-labels     # start from the classifier's labels
+python caiman-reader.py --model-labels xgboost   # always start from that model's labels
+python caiman-reader.py --no-model-labels        # ignore the classifier's files
 ```
 
 **Auto-QC classifier.** `classifier/` trains an XGBoost model on the manual labels and writes

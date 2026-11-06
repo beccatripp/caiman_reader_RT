@@ -5,8 +5,9 @@ Learns the manual Accept / Reject labels saved by caiman-reader (`results_qualit
 family (`model_tag` in `config.yaml`): `xgboost` for this model; later models get their own tag
 (`xgboost-context`, `xgboost-pretrained`, `cnn-resnet`, ...) so their files can sit side by side. Modelled on
 the maze-runners XGBoost auto-QC (omckissi, `notebooks/S03_auto_qc_classifier_xgboost.ipynb`), adapted to the
-OLL S2026 outputs. Open a plane with `python caiman-reader.py --model-labels xgboost` to check or correct the
-model's labels; Save writes `results_quality.csv` as usual and appends a row to `review_log.csv` (below).
+OLL S2026 outputs. caiman-reader loads a plane's model file by default (and asks which, if there are several)
+so you can check or correct the model's labels. Save writes `results_quality_model_<tag>_useredits.csv`, so
+the model's own file is never changed, and appends a row to `review_log.csv` (below).
 
 - Code: `caiman_reader_RT/classifier/`
 - Everything it produces except `results_quality_model_<tag>.csv`: `/oscar/home/rtripp/data/rtripp/caiman_classifier_model/`
@@ -57,14 +58,15 @@ sbatch classifier/slurm/evaluate.sbatch --version $V --locked-test
 # 5. Blind prospective check: 3 random unreviewed planes
 python classifier/scripts/make_plane_list.py --random 3 --seed 1 --out $OUT/lists/blind_check.txt
 sbatch --array=0 classifier/slurm/apply.sbatch --version $V --plane-list $OUT/lists/blind_check.txt
-#    review those planes in caiman-reader WITHOUT --model-labels, save, then:
+#    review those planes with caiman-reader.py --no-model-labels, save, then:
 sbatch classifier/slurm/evaluate.sbatch --version $V --compare --plane-list $OUT/lists/blind_check.txt
 #    prints PASS/FAIL against prospective_pass in config.yaml
 
 # 5b. One animal, e.g. all unreviewed RB06 planes (58 planes -> 12 tasks of 5)
 python classifier/scripts/make_plane_list.py --mouse RB06 --out $OUT/lists/RB06_unlabeled.txt
 sbatch --array=0-11 classifier/slurm/apply.sbatch --version $V --plane-list $OUT/lists/RB06_unlabeled.txt
-#    then review with: python caiman-reader.py --model-labels xgboost   (each Save logs time and changes)
+#    then review with: python caiman-reader.py   (loads the model file; Save writes ..._xgboost_useredits.csv
+#    and logs time and changes)
 
 # 6. Everything else unreviewed (5 planes per task, at most 20 tasks at once)
 python classifier/scripts/make_plane_list.py --out $OUT/lists/unlabeled.txt
@@ -84,7 +86,8 @@ the counts without writing anything.
 | `<plane>/results_quality_model_<tag>.csv` | `apply.py` | no header, `roi_id,A\|R`, one row per `estimates/idx_components` in that order (byte-for-byte the reader's format) |
 | `$OUT/predictions/<version>/<pid>.csv` | `apply.py` | `roi_id, p_accept, label, threshold, model_version, model_tag` |
 | `$OUT/features[_movie]/<pid>.parquet`, `<pid>.checks.json` | `extract_features.py`; `apply.py` caches core features it had to compute | cached; `--overwrite` to recompute |
-| `$OUT/review_log.csv` | `caiman-reader.py --model-labels` | one row per Save: minutes open, cells, model vs saved accepts, A→R / R→A / other changes, blanks, manual labels at load. Append-only |
+| `<plane>/results_quality_model_<tag>_useredits.csv` | `caiman-reader.py` | your corrections, when you started from a model file; same format. Not read by training |
+| `$OUT/review_log.csv` | `caiman-reader.py` | one row per Save that started from a model file: minutes open, cells, model vs saved accepts, A→R / R→A / other changes, blanks, edits resumed at load. Append-only |
 | `$OUT/models/<version>/{dev,deploy}/{model.json,metadata.json}` | `train.py` | XGBoost JSON; metadata has features, threshold, parameters, training planes, git commit, CV summary |
 | `$OUT/reports/<version>/` | `train.py`, `evaluate.py` | see below |
 
@@ -107,8 +110,8 @@ the plane folder before and after writing, and fails if anything other than the 
 - **Locked test set:** one plane0 per animal, drawn with `numpy.random.default_rng(0)` before any training:
   RB01 26-04-09, RB05 26-03-21, RB06 26-03-24, RB07 26-03-15, RB08 26-03-05, RB09 26-03-01. `train.py` never
   loads them until the deployment refit at the very end, and never scores them.
-- A plane reviewed with `--model-labels` holds model-seeded labels. Add it to `training_planes` only if it was
-  fully re-checked.
+- Corrections of model labels go to `results_quality_model_<tag>_useredits.csv`, not `results_quality.csv`,
+  so training never picks them up by accident. Using them for training needs a deliberate code change.
 
 ## Features (`cmclf/features.py`)
 

@@ -28,13 +28,19 @@ initpath = os.path.dirname(os.path.abspath(__file__))
 
 # python caiman-reader.py --overlap-filter  -> also apply filters.ROISet
 USE_OVERLAP_FILTER = "--overlap-filter" in sys.argv
-# python caiman-reader.py --model-labels [TAG]  -> start from the classifier's
-# results_quality_model_<TAG>.csv (TAG can be left out when the folder has only
-# one model file); Save still writes results_quality.csv, and also appends a row
-# (time open, labels changed) to the review log
-USE_MODEL_LABELS = "--model-labels" in sys.argv
+# Label files in a plane folder:
+#   results_quality.csv                           manual labels
+#   results_quality_model_<TAG>.csv               classifier output (never written here)
+#   results_quality_model_<TAG>_useredits.csv     your corrections of that model's labels
+# On opening a plane the reader uses the only label source present, or asks which
+# one when there are several. Starting from a model file, Save writes its
+# _useredits file and appends a row (time open, labels changed) to the review log.
+# python caiman-reader.py --model-labels TAG  -> always start from that model's file
+# python caiman-reader.py --no-model-labels   -> ignore model files (blind review)
+USER_EDITS_SUFFIX = "_useredits"
+NO_MODEL_LABELS = "--no-model-labels" in sys.argv
 MODEL_TAG = None
-if USE_MODEL_LABELS:
+if "--model-labels" in sys.argv:
     _i = sys.argv.index("--model-labels")
     if _i + 1 < len(sys.argv) and not sys.argv[_i + 1].startswith("--"):
         MODEL_TAG = sys.argv[_i + 1]
@@ -42,7 +48,7 @@ REVIEW_LOG = os.environ.get("CMCLF_REVIEW_LOG",
                             "/oscar/home/rtripp/data/rtripp/caiman_classifier_model/review_log.csv")
 REVIEW_LOG_FIELDS = ["saved_at", "loaded_at", "user", "plane_dir", "model_file", "minutes_open", "n_cells",
                      "n_model_A", "n_saved_A", "n_A_to_R", "n_R_to_A", "n_other_changed", "n_blank",
-                     "n_manual_at_load"]
+                     "n_edits_at_load"]
 
 # Must match OLL_Processing/oll_caiman_segmentation.py so the dF/F shown here
 # is the same one saved to traces_dff.npy
@@ -67,6 +73,7 @@ SCREEN_MARGIN_W = 40
 SCREEN_MARGIN_H = 100
 
 h5_path = None
+label_csv = None  # where Save writes
 review = None  # --model-labels: load time and the model's labels, for the review log
 root = tk.Tk()
 root.title("CaImAn Reader")
@@ -115,18 +122,67 @@ def quality_csv_path(h5_file):
     return os.path.splitext(h5_file)[0] + "_quality.csv"
 
 
-def model_quality_csv_path(h5_file, tag=None):
-    """results.hdf5 -> results_quality_model_<tag>.csv (written by
-    classifier/scripts/apply.py). Without a tag: the folder's only model file, or
-    None when there are none or several (archived <tag>__<version> files are ignored)."""
-    base = os.path.splitext(h5_file)[0] + "_quality_model"
-    if tag:
-        return f"{base}_{tag}.csv"
-    found = sorted(p for p in glob.glob(glob.escape(base) + "_*.csv") if "__" not in os.path.basename(p))
-    if len(found) > 1:
-        print("Several model label files, pick one with --model-labels TAG: " +
-              ", ".join(os.path.basename(p) for p in found))
-    return found[0] if len(found) == 1 else None
+def model_quality_csv_path(h5_file, tag):
+    """results.hdf5 -> results_quality_model_<tag>.csv (written by classifier/scripts/apply.py)."""
+    return f"{os.path.splitext(h5_file)[0]}_quality_model_{tag}.csv"
+
+
+def user_edits_csv_path(model_csv):
+    """results_quality_model_<tag>.csv -> results_quality_model_<tag>_useredits.csv"""
+    return os.path.splitext(model_csv)[0] + USER_EDITS_SUFFIX + ".csv"
+
+
+def model_quality_csvs(h5_file):
+    """The folder's model label files, without archived <tag>__<version> files and
+    _useredits files."""
+    base = os.path.splitext(h5_file)[0] + "_quality_model_"
+    return sorted(p for p in glob.glob(glob.escape(base) + "*.csv")
+                  if "__" not in os.path.basename(p) and not p.endswith(USER_EDITS_SUFFIX + ".csv"))
+
+
+def choose_label_source(h5_file):
+    """Labels to start from: None (manual results_quality.csv, or a new plane) or
+    a model file's path. Asks when the folder has several sources; returns False
+    when the choice is cancelled."""
+    if NO_MODEL_LABELS:
+        return None
+    if MODEL_TAG:
+        path = model_quality_csv_path(h5_file, MODEL_TAG)
+        if os.path.exists(path):
+            return path
+        print(f"No {os.path.basename(path)} in this folder (--model-labels {MODEL_TAG})")
+    options = [(p, os.path.basename(p) + ("  (+ your saved edits)" if os.path.exists(user_edits_csv_path(p)) else ""))
+               for p in model_quality_csvs(h5_file)]
+    if os.path.exists(quality_csv_path(h5_file)):
+        options.insert(0, (None, os.path.basename(quality_csv_path(h5_file)) + "  (manual labels)"))
+    if not options:
+        return None
+    if len(options) == 1:
+        return options[0][0]
+
+    dlg = tk.Toplevel(root)
+    dlg.title("Choose labels")
+    tk.Label(dlg, text="This plane has several label files. Start from:", justify=tk.LEFT).pack(anchor="w", padx=10, pady=(10, 4))
+    pick = tk.IntVar(value=0)
+    for i, (_, text) in enumerate(options):
+        tk.Radiobutton(dlg, text=text, variable=pick, value=i).pack(anchor="w", padx=20)
+    tk.Label(dlg, text="Starting from a model file, Save writes its _useredits file;\nthe model's own file is never changed.",
+             justify=tk.LEFT, fg="#555555").pack(anchor="w", padx=10, pady=4)
+    result = {"choice": False}
+
+    def ok():
+        result["choice"] = options[pick.get()][0]
+        dlg.destroy()
+
+    buttons = tk.Frame(dlg)
+    tk.Button(buttons, text="Open", command=ok).pack(side=tk.LEFT, padx=5)
+    tk.Button(buttons, text="Cancel", command=dlg.destroy).pack(side=tk.LEFT, padx=5)
+    buttons.pack(pady=10)
+    dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+    dlg.lift()
+    dlg.grab_set()
+    dlg.wait_window()
+    return result["choice"]
 
 
 def append_review_log(row):
@@ -214,7 +270,7 @@ def fit_scale(tif):
 
 
 def initialize_project():
-    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root, h5_path, rolling_window, review
+    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root, h5_path, rolling_window, review, label_csv
 
     fold = filedialog.askdirectory(initialdir=initpath, title="Select Folder")
     if not fold:
@@ -226,6 +282,9 @@ def initialize_project():
         messagebox.showerror("CaImAn Reader", f"No .hdf5 file found in:\n{fold}")
         return
     h5_file = h5_files[0]
+    model_csv = choose_label_source(h5_file)
+    if model_csv is False:
+        return
 
     tif = find_movie(fold)
     if tif is None or not os.path.exists(tif):
@@ -276,32 +335,30 @@ def initialize_project():
     # Undo only applies within one plane
     erase_history.clear()
     undo_button.config(state=tk.DISABLED)
-    quality_csv = quality_csv_path(h5_file)
     review = None
-    if USE_MODEL_LABELS:
-        # Model labels first, then any manual labels already saved on top, so a
-        # partly corrected plane resumes where it was left
-        model_csv = model_quality_csv_path(h5_file, MODEL_TAG)
-        if model_csv and os.path.exists(model_csv):
-            print(f"Model labels: {read_quality_csv(model_csv, quality_check)} from {model_csv}")
-            review = dict(start=time.time(), loaded_at=datetime.datetime.now().isoformat(timespec="seconds"),
-                          model_file=os.path.basename(model_csv), model_labels=dict(quality_check),
-                          n_manual_at_load=0)
-        else:
-            print(f"No {os.path.basename(model_csv) if model_csv else 'model label file'} in this folder: "
-                  f"cells start unlabelled")
-    if not os.path.exists(quality_csv):
-        print("NEW QUALITY CSV")
+    if model_csv:
+        # Model labels first, then any edits already saved on top, so a partly
+        # corrected plane resumes where it was left
+        print(f"Model labels: {read_quality_csv(model_csv, quality_check)} from {model_csv}")
+        review = dict(start=time.time(), loaded_at=datetime.datetime.now().isoformat(timespec="seconds"),
+                      model_file=os.path.basename(model_csv), model_labels=dict(quality_check),
+                      n_edits_at_load=0)
+        label_csv = user_edits_csv_path(model_csv)
+        if os.path.exists(label_csv):
+            review["n_edits_at_load"] = read_quality_csv(label_csv, quality_check, skip_blank=True)
+            print(f"Your edits: {review['n_edits_at_load']} labels from {label_csv}")
+        print(f"Save writes {os.path.basename(label_csv)} (the model file is never changed)")
     else:
-        n = read_quality_csv(quality_csv, quality_check, skip_blank=USE_MODEL_LABELS)
-        print(f"Manual labels: {n} from {quality_csv}")
-        if review is not None:
-            review["n_manual_at_load"] = n
-    if USE_MODEL_LABELS:
-        print(f"Save writes {os.path.basename(quality_csv)} (the model file is never changed)")
+        label_csv = quality_csv_path(h5_file)
+        if not os.path.exists(label_csv):
+            print("NEW QUALITY CSV")
+        else:
+            print(f"Manual labels: {read_quality_csv(label_csv, quality_check)} from {label_csv}")
+    root.title(f"CaImAn Reader - {os.path.basename(model_csv) if model_csv else 'manual labels'}")
 
 
     active_cell.set(int(list(footprints.keys())[0]))
+    quality.set(quality_check[active_cell.get()])
     update_mpl()
     tif2frame(active_vid, 0)
     set_scale(active_vid)
@@ -690,7 +747,9 @@ def save_project():
     global quality_check, save_status
     if h5_path is None:
         return
-    name = quality_csv_path(h5_path)
+    # results_quality.csv, or a model file's _useredits copy: never the model file itself
+    name = label_csv
+    assert name == quality_csv_path(h5_path) or name.endswith(USER_EDITS_SUFFIX + ".csv"), name
     with open(name, "w", newline='') as f:
         w = csv.writer(f)
         for k, v in quality_check.items():
@@ -708,7 +767,7 @@ def save_project():
             n_R_to_A=sum(m.get(k) == 'R' and v == 'A' for k, v in quality_check.items()),
             n_other_changed=sum(m.get(k, '') != v and {m.get(k, ''), v} != {'A', 'R'}
                                 for k, v in quality_check.items()),
-            n_blank=sum(v == '' for v in saved), n_manual_at_load=review["n_manual_at_load"]))
+            n_blank=sum(v == '' for v in saved), n_edits_at_load=review["n_edits_at_load"]))
 
 def next_cell():
     global active_cell, footprints, quality, quality_check

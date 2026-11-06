@@ -321,6 +321,29 @@ the data folders; if its folder doesn't exist, or writing fails, Save still save
 labels and prints a note. This measures whether model-seeded review is fast enough.
 New helpers: `model_quality_csv_path(h5_file, tag)`, `append_review_log(row)`.
 
+### 17. Model labels by default; edits saved to `_useredits`
+
+Before this, model files were only read with `--model-labels`, so opening a plane
+normally showed the model-labelled RB06 planes as unlabelled. Now, on opening a plane
+(`choose_label_source(h5_file)`):
+- The label sources are `results_quality.csv` (manual) and each
+  `results_quality_model_<tag>.csv`. Archived `__<version>` files and `_useredits` files
+  are not sources.
+- One source: it is used. None: the plane starts unlabelled. Several: a window lists them
+  (marking models that have saved edits) and asks which to start from; Cancel aborts the
+  load. The window title shows the file in use.
+- `--model-labels TAG` uses that model's file without asking (falls back to the above if
+  it is missing). `--no-model-labels` ignores model files, for blind review.
+
+Starting from a model file, the labels are the model's, with the non-blank labels of
+`results_quality_model_<tag>_useredits.csv` on top. **Save writes that `_useredits` file**,
+not `results_quality.csv`, and never the model file (an assertion guards this). So the
+pure model output is kept, and model-seeded labels stay separate from labels made from
+scratch, which the classifier trains on. Starting from `results_quality.csv`, loading and
+saving are as before. The review log is written for every Save that started from a model
+file; its `n_manual_at_load` column is now `n_edits_at_load` (labels resumed from
+`_useredits`). `classifier/cmclf/io.py` rejects model tags ending in `_useredits`.
+
 ---
 
 ## filters.py
