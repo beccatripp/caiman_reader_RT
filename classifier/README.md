@@ -153,6 +153,35 @@ reported: ROC-AUC, accuracy next to the majority baseline, Accept precision / re
 calibration plot, and the per-plane error in the number of accepted cells (absolute and %).
 `cv_disagreements_*.csv` lists the most confident disagreements (plane, roi_id) to look at in the reader.
 
+## xgboost-context (in progress): cross-session registration
+
+Stage 1 registers every session of one mouse x plane to a reference session, so later stages can ask whether
+a footprint is also present in nearby sessions, which is evidence that it is a real cell.
+`scripts/register_fov.py`, `cmclf/registration.py`; settings under `registration:` in `config.yaml`.
+
+- Images: each session's `ops.npy` `meanImg`, high-pass filtered and contrast normalised.
+- Reference: among the middle half of the sessions by date, the one that correlates best with all the others.
+- Rigid: rotation search (+-3 deg) with phase correlation for the shift. Nonrigid: phase correlation in 128 px
+  blocks overlapping by half, outlier blocks replaced, lightly smoothed, refined 3 times. On synthetic images
+  with a known rotation, shift and smooth warp it recovers the mapping to 0.2 px median, 0.5 px 95th percentile
+  (`tests/test_registration.py`).
+- QC per session, with no registration / rigid / nonrigid: correlation of the enhanced images (border excluded)
+  and mutual-nearest matching of CaImAn-accepted centroids within 10 px (fraction matched, median distance). The
+  nonrigid field is kept only if it doesn't make either worse than rigid. A session **fails** if the image
+  correlation is < 0.2, the median cell distance > 3 px, or < 30% of cells match.
+- ROICaT's existing tracking (`CellTracking_ROICat/`) is not used.
+
+```bash
+python classifier/scripts/register_fov.py --list                 # groups and their array index
+sbatch --array=0-11 classifier/slurm/register.sbatch            # one mouse x plane per task, -> registration/v1/
+```
+
+Output per group, `$OUT/registration/<run>/<mouse>_<plane>/`: `<pid>.npz` (transform: reference -> session pull
+map, see `cmclf/registration.Transform`), `qc.csv`, `summary.json`, `overlays_*.png` (reference magenta, session
+green; aligned structure is white), `qc_metrics.png`, `stack.png` (reference vs the average of the passing
+sessions: a sharp average means the sessions line up). An existing group folder is never overwritten (`--run`).
+**Gate 1:** look at these before anything uses the transforms.
+
 ## Layout
 
 ```
@@ -160,6 +189,9 @@ classifier/
   config.yaml  environment.yml  README.md
   cmclf/   io.py (planes, labels, HDF5)  features.py (G1-G8, replica)  movie_features.py (G9)
            model.py (CV, tuning, fits)   report.py (metrics, plots)    jobs.py (login guard, array task)
-  scripts/ make_plane_list.py  extract_features.py  train.py  evaluate.py  apply.py
+           registration.py (cross-session rigid + nonrigid, QC)
+  scripts/ make_plane_list.py  extract_features.py  train.py  evaluate.py  apply.py  register_fov.py
   slurm/   extract_features.sbatch  movie_features.sbatch  train.sbatch  evaluate.sbatch  apply.sbatch
+           register.sbatch
+  tests/   test_registration.py (synthetic, no data needed)
 ```

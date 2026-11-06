@@ -62,6 +62,26 @@ movie_features:
   chunk_frames: 200
   shift_crop_px: 256         # central crop for frame-shift estimation
 
+# xgboost-context stage 1: cross-session registration (scripts/register_fov.py)
+registration:
+  enhance_sigma_px: 12        # high-pass / local contrast scale (~half a cell diameter)
+  rigid_max_shift_px: 80
+  max_angle_deg: 3.0          # rotation search -3..3 deg ...
+  angle_step_deg: 0.5         # ... in 0.5 deg steps, then a finer search around the best
+  block_px: 128               # nonrigid: phase correlation in 128 px blocks ...
+  block_overlap: 0.5          # ... overlapping by half (7 x 7 blocks on 512 px)
+  nonrigid_max_shift_px: 12
+  min_block_strength: 6.0     # block peak, in SDs of its correlation surface
+  field_smooth_blocks: 0.5
+  nonrigid_iterations: 3
+  match_radius_px: 10         # QC: mutual-nearest accepted-cell centroids within this
+  qc_border_px: 50            # QC image correlation ignores the border (CaImAn border_pix)
+  qc_zoom_px: 160
+  pass:                       # a session fails QC (gate 1) if any of these is missed
+    min_img_corr: 0.2
+    max_median_dist_px: 3.0
+    min_frac_matched: 0.3
+
 model:
   # Inner-CV grid for the tuned XGBoost models
   grid:
