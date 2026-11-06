@@ -19,6 +19,7 @@ import csv
 from matplotlib.path import Path
 import sys
 import glob
+import re
 import time
 import getpass
 import datetime
@@ -127,9 +128,23 @@ def model_quality_csv_path(h5_file, tag):
     return f"{os.path.splitext(h5_file)[0]}_quality_model_{tag}.csv"
 
 
-def user_edits_csv_path(model_csv):
-    """results_quality_model_<tag>.csv -> results_quality_model_<tag>_useredits.csv"""
-    return os.path.splitext(model_csv)[0] + USER_EDITS_SUFFIX + ".csv"
+def user_edits_csv_path(model_csv, version=1):
+    """results_quality_model_<tag>.csv -> results_quality_model_<tag>_useredits.csv
+    (version 1), ..._useredits-v02.csv, ..._useredits-v03.csv, ..."""
+    return os.path.splitext(model_csv)[0] + USER_EDITS_SUFFIX + (f"-v{version:02d}" if version > 1 else "") + ".csv"
+
+
+def user_edits_versions(model_csv):
+    """Existing _useredits files of a model file, oldest version first, and the
+    path the next new version would get."""
+    versions = {}
+    for p in glob.glob(glob.escape(os.path.splitext(model_csv)[0] + USER_EDITS_SUFFIX) + "*.csv"):
+        m = re.fullmatch(re.escape(USER_EDITS_SUFFIX) + r"(?:-v(\d+))?\.csv",
+                         os.path.basename(p)[len(os.path.basename(os.path.splitext(model_csv)[0])):])
+        if m:
+            versions[int(m.group(1) or 1)] = p
+    found = [versions[v] for v in sorted(versions)]
+    return found, user_edits_csv_path(model_csv, max(versions, default=0) + 1)
 
 
 def model_quality_csvs(h5_file):
@@ -137,32 +152,41 @@ def model_quality_csvs(h5_file):
     _useredits files."""
     base = os.path.splitext(h5_file)[0] + "_quality_model_"
     return sorted(p for p in glob.glob(glob.escape(base) + "*.csv")
-                  if "__" not in os.path.basename(p) and not p.endswith(USER_EDITS_SUFFIX + ".csv"))
+                  if "__" not in os.path.basename(p) and USER_EDITS_SUFFIX not in os.path.basename(p))
 
 
 def choose_label_source(h5_file):
-    """Labels to start from: None (manual results_quality.csv, or a new plane) or
-    a model file's path. Asks when the folder has several sources; returns False
-    when the choice is cancelled."""
+    """Labels to start from, as (model_csv, edits_csv): (None, None) for the
+    manual results_quality.csv or a new plane. With a model file, edits_csv is
+    where Save writes: an existing _useredits version, whose labels are loaded on
+    top of the model's, or a new version that doesn't exist yet (start from the
+    model's own labels; earlier versions are never overwritten). Asks when there
+    is more than one choice; returns False when cancelled."""
     if NO_MODEL_LABELS:
-        return None
+        return None, None
     if MODEL_TAG:
         path = model_quality_csv_path(h5_file, MODEL_TAG)
         if os.path.exists(path):
-            return path
+            found, new = user_edits_versions(path)
+            return path, (found[-1] if found else new)
         print(f"No {os.path.basename(path)} in this folder (--model-labels {MODEL_TAG})")
-    options = [(p, os.path.basename(p) + ("  (+ your saved edits)" if os.path.exists(user_edits_csv_path(p)) else ""))
-               for p in model_quality_csvs(h5_file)]
+    options = []
     if os.path.exists(quality_csv_path(h5_file)):
-        options.insert(0, (None, os.path.basename(quality_csv_path(h5_file)) + "  (manual labels)"))
+        options.append(((None, None), os.path.basename(quality_csv_path(h5_file)) + "  (manual labels)"))
+    for p in model_quality_csvs(h5_file):
+        found, new = user_edits_versions(p)
+        for e in reversed(found):
+            options.append(((p, e), os.path.basename(e) + "  (model labels + your edits)"))
+        options.append(((p, new), os.path.basename(p) + "  (model labels" +
+                        (f" only; Save writes a new {os.path.basename(new)})" if found else ")")))
     if not options:
-        return None
+        return None, None
     if len(options) == 1:
         return options[0][0]
 
     dlg = tk.Toplevel(root)
     dlg.title("Choose labels")
-    tk.Label(dlg, text="This plane has several label files. Start from:", justify=tk.LEFT).pack(anchor="w", padx=10, pady=(10, 4))
+    tk.Label(dlg, text="This plane has more than one set of labels. Start from:", justify=tk.LEFT).pack(anchor="w", padx=10, pady=(10, 4))
     pick = tk.IntVar(value=0)
     for i, (_, text) in enumerate(options):
         tk.Radiobutton(dlg, text=text, variable=pick, value=i).pack(anchor="w", padx=20)
@@ -282,9 +306,10 @@ def initialize_project():
         messagebox.showerror("CaImAn Reader", f"No .hdf5 file found in:\n{fold}")
         return
     h5_file = h5_files[0]
-    model_csv = choose_label_source(h5_file)
-    if model_csv is False:
+    choice = choose_label_source(h5_file)
+    if choice is False:
         return
+    model_csv, edits_csv = choice
 
     tif = find_movie(fold)
     if tif is None or not os.path.exists(tif):
@@ -343,7 +368,7 @@ def initialize_project():
         review = dict(start=time.time(), loaded_at=datetime.datetime.now().isoformat(timespec="seconds"),
                       model_file=os.path.basename(model_csv), model_labels=dict(quality_check),
                       n_edits_at_load=0)
-        label_csv = user_edits_csv_path(model_csv)
+        label_csv = edits_csv
         if os.path.exists(label_csv):
             review["n_edits_at_load"] = read_quality_csv(label_csv, quality_check, skip_blank=True)
             print(f"Your edits: {review['n_edits_at_load']} labels from {label_csv}")
@@ -354,7 +379,9 @@ def initialize_project():
             print("NEW QUALITY CSV")
         else:
             print(f"Manual labels: {read_quality_csv(label_csv, quality_check)} from {label_csv}")
-    root.title(f"CaImAn Reader - {os.path.basename(model_csv) if model_csv else 'manual labels'}")
+    shown = (os.path.basename(label_csv if os.path.exists(label_csv) else model_csv) + f" (saves to {os.path.basename(label_csv)})"
+             if model_csv else "manual labels")
+    root.title(f"CaImAn Reader - {shown}")
 
 
     active_cell.set(int(list(footprints.keys())[0]))
@@ -749,7 +776,7 @@ def save_project():
         return
     # results_quality.csv, or a model file's _useredits copy: never the model file itself
     name = label_csv
-    assert name == quality_csv_path(h5_path) or name.endswith(USER_EDITS_SUFFIX + ".csv"), name
+    assert name == quality_csv_path(h5_path) or re.search(USER_EDITS_SUFFIX + r"(-v\d+)?\.csv$", name), name
     with open(name, "w", newline='') as f:
         w = csv.writer(f)
         for k, v in quality_check.items():

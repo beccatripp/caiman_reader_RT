@@ -23,8 +23,8 @@ USER_EDITS_SUFFIX = "_useredits"  # must match caiman-reader.py
 def model_csv_name(tag):
     """results_quality_model_<tag>.csv: one file per model family (xgboost,
     xgboost-context, ...), so several models' labels can sit in one plane folder.
-    caiman-reader saves corrections to results_quality_model_<tag>_useredits.csv."""
-    if not tag or "__" in tag or tag.endswith(USER_EDITS_SUFFIX) or any(c in tag for c in "/\\ "):
+    caiman-reader saves corrections to results_quality_model_<tag>_useredits[-vNN].csv."""
+    if not tag or "__" in tag or USER_EDITS_SUFFIX in tag or any(c in tag for c in "/\\ "):
         raise ValueError(f"bad model tag {tag!r}")
     return f"{MODEL_CSV_PREFIX}{tag}.csv"
 

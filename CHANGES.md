@@ -344,6 +344,15 @@ saving are as before. The review log is written for every Save that started from
 file; its `n_manual_at_load` column is now `n_edits_at_load` (labels resumed from
 `_useredits`). `classifier/cmclf/io.py` rejects model tags ending in `_useredits`.
 
+**Versioned edits.** Each model's edits files are `_useredits.csv` (version 1),
+`_useredits-v02.csv`, `_useredits-v03.csv`, ... (`user_edits_versions(model_csv)`). The
+window lists every version, newest first, as "model labels + your edits"; Save then writes
+that same version. It also lists "model labels only": starting from the model's own labels
+when edits already exist, Save writes a **new** version (highest existing + 1), so earlier
+edits are never overwritten. `--model-labels TAG` resumes the newest version. Other names
+containing `_useredits` are not offered as sources, and `classifier/cmclf/io.py` rejects
+model tags containing `_useredits`.
+
 ---
 
 ## filters.py

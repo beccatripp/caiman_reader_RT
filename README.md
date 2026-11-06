@@ -30,7 +30,9 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
   folder has only one label file it is used; if it has several (manual labels, more than one model) a window
   asks which to start from. The window title shows the file in use. Starting from a model file:
   - Save writes `results_quality_model_<TAG>_useredits.csv`; the model's own file is never changed
-  - Reopening the plane loads the model file with your `_useredits` labels on top, so you resume where you left off
+  - Reopening the plane asks whether to resume one of your edits files (Save writes that file again) or to start
+    from the model labels only (Save writes a new version, `_useredits-v02.csv`, `-v03`, ..., so earlier edits
+    are never overwritten)
   - Each Save appends a row to the review log (`caiman_classifier_model/review_log.csv`, or
     `$CMCLF_REVIEW_LOG`): minutes open and how many labels you changed
 - `--model-labels TAG` always starts from that model's file; `--no-model-labels` ignores model files (blind review)

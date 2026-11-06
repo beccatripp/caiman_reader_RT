@@ -86,7 +86,7 @@ the counts without writing anything.
 | `<plane>/results_quality_model_<tag>.csv` | `apply.py` | no header, `roi_id,A\|R`, one row per `estimates/idx_components` in that order (byte-for-byte the reader's format) |
 | `$OUT/predictions/<version>/<pid>.csv` | `apply.py` | `roi_id, p_accept, label, threshold, model_version, model_tag` |
 | `$OUT/features[_movie]/<pid>.parquet`, `<pid>.checks.json` | `extract_features.py`; `apply.py` caches core features it had to compute | cached; `--overwrite` to recompute |
-| `<plane>/results_quality_model_<tag>_useredits.csv` | `caiman-reader.py` | your corrections, when you started from a model file; same format. Not read by training |
+| `<plane>/results_quality_model_<tag>_useredits[-vNN].csv` | `caiman-reader.py` | your corrections, when you started from a model file; same format. Starting again from the model's labels writes a new `-vNN` version. Not read by training |
 | `$OUT/review_log.csv` | `caiman-reader.py` | one row per Save that started from a model file: minutes open, cells, model vs saved accepts, A→R / R→A / other changes, blanks, edits resumed at load. Append-only |
 | `$OUT/models/<version>/{dev,deploy}/{model.json,metadata.json}` | `train.py` | XGBoost JSON; metadata has features, threshold, parameters, training planes, git commit, CV summary |
 | `$OUT/reports/<version>/` | `train.py`, `evaluate.py` | see below |
