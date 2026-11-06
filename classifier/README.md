@@ -1,13 +1,15 @@
 # Auto-QC classifier for CaImAn ROIs
 
 Learns the manual Accept / Reject labels saved by caiman-reader (`results_quality.csv`) and writes
-`results_quality_model.csv`, in the same format, for planes nobody has reviewed. Modelled on the
-maze-runners XGBoost auto-QC (omckissi, `notebooks/S03_auto_qc_classifier_xgboost.ipynb`), adapted to the
-OLL S2026 outputs. Open a plane with `python caiman-reader.py --model-labels` to check or correct the
-model's labels; Save writes `results_quality.csv` as usual.
+`results_quality_model_<tag>.csv`, in the same format, for planes nobody has reviewed. `<tag>` names the model
+family (`model_tag` in `config.yaml`): `xgboost` for this model; later models get their own tag
+(`xgboost-context`, `xgboost-pretrained`, `cnn-resnet`, ...) so their files can sit side by side. Modelled on
+the maze-runners XGBoost auto-QC (omckissi, `notebooks/S03_auto_qc_classifier_xgboost.ipynb`), adapted to the
+OLL S2026 outputs. Open a plane with `python caiman-reader.py --model-labels xgboost` to check or correct the
+model's labels; Save writes `results_quality.csv` as usual and appends a row to `review_log.csv` (below).
 
 - Code: `caiman_reader_RT/classifier/`
-- Everything it produces except `results_quality_model.csv`: `/oscar/home/rtripp/data/rtripp/caiman_classifier_model/`
+- Everything it produces except `results_quality_model_<tag>.csv`: `/oscar/home/rtripp/data/rtripp/caiman_classifier_model/`
 - Settings, training planes and locked test planes: `config.yaml`
 
 ## Setup (once)
@@ -59,6 +61,11 @@ sbatch --array=0 classifier/slurm/apply.sbatch --version $V --plane-list $OUT/li
 sbatch classifier/slurm/evaluate.sbatch --version $V --compare --plane-list $OUT/lists/blind_check.txt
 #    prints PASS/FAIL against prospective_pass in config.yaml
 
+# 5b. One animal, e.g. all unreviewed RB06 planes (58 planes -> 12 tasks of 5)
+python classifier/scripts/make_plane_list.py --mouse RB06 --out $OUT/lists/RB06_unlabeled.txt
+sbatch --array=0-11 classifier/slurm/apply.sbatch --version $V --plane-list $OUT/lists/RB06_unlabeled.txt
+#    then review with: python caiman-reader.py --model-labels xgboost   (each Save logs time and changes)
+
 # 6. Everything else unreviewed (5 planes per task, at most 20 tasks at once)
 python classifier/scripts/make_plane_list.py --out $OUT/lists/unlabeled.txt
 N=$(wc -l < $OUT/lists/unlabeled.txt)
@@ -74,16 +81,18 @@ the counts without writing anything.
 
 | File | Written by | Notes |
 |---|---|---|
-| `<plane>/results_quality_model.csv` | `apply.py` | no header, `roi_id,A\|R`, one row per `estimates/idx_components` in that order (byte-for-byte the reader's format) |
-| `$OUT/predictions/<version>/<pid>.csv` | `apply.py` | `roi_id, p_accept, label, threshold, model_version` |
-| `$OUT/features[_movie]/<pid>.parquet`, `<pid>.checks.json` | `extract_features.py` | cached; `--overwrite` to recompute |
+| `<plane>/results_quality_model_<tag>.csv` | `apply.py` | no header, `roi_id,A\|R`, one row per `estimates/idx_components` in that order (byte-for-byte the reader's format) |
+| `$OUT/predictions/<version>/<pid>.csv` | `apply.py` | `roi_id, p_accept, label, threshold, model_version, model_tag` |
+| `$OUT/features[_movie]/<pid>.parquet`, `<pid>.checks.json` | `extract_features.py`; `apply.py` caches core features it had to compute | cached; `--overwrite` to recompute |
+| `$OUT/review_log.csv` | `caiman-reader.py --model-labels` | one row per Save: minutes open, cells, model vs saved accepts, A→R / R→A / other changes, blanks, manual labels at load. Append-only |
 | `$OUT/models/<version>/{dev,deploy}/{model.json,metadata.json}` | `train.py` | XGBoost JSON; metadata has features, threshold, parameters, training planes, git commit, CV summary |
 | `$OUT/reports/<version>/` | `train.py`, `evaluate.py` | see below |
 
 **Never touched:** `results_quality.csv`. `apply.py` skips planes that already have a manual
 `results_quality.csv` (`--include-labeled` to apply anyway, e.g. to compare) and planes that already have a
-`results_quality_model.csv`. With `--replace`, the old model file is renamed to
-`results_quality_model_<version that wrote it>.csv` first, so nothing is deleted. It fingerprints every file in
+`results_quality_model_<tag>.csv` for the same tag (other tags' files are never touched). With `--replace`, the
+old file is renamed to `results_quality_model_<tag>__<version that wrote it>.csv` first, so nothing is
+deleted. Models trained before tags existed (`v20261105`, `v20261105_kappa`) use `model_tag` from the config. It fingerprints every file in
 the plane folder before and after writing, and fails if anything other than the new file changed.
 
 ## Labels and planes

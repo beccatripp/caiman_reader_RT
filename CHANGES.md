@@ -302,6 +302,25 @@ A plane saved after reviewing with `--model-labels` holds model-seeded labels. T
 classifier only trains on the planes listed in `classifier/config.yaml`, so such a plane
 is used for training only if it is added there on purpose.
 
+### 16. Model file tags and the review log
+
+Each model family now writes its own file, `results_quality_model_<tag>.csv` (the
+first is `results_quality_model_xgboost.csv`; later ones `_xgboost-context`, ...), so
+several models' labels can sit in one folder. `--model-labels TAG` picks one. Without a
+tag the folder's only model file is used; if there are several, the reader lists them
+and starts unlabelled. Archived files (`results_quality_model_<tag>__<version>.csv`,
+from `apply.py --replace`) are ignored.
+
+In `--model-labels` mode every Save also appends a row to the review log
+(`/oscar/home/rtripp/data/rtripp/caiman_classifier_model/review_log.csv`, or
+`$CMCLF_REVIEW_LOG`): load and save times, user, plane, model file, minutes since the
+plane was loaded, cells, accepts in the model file and in the saved labels, labels
+changed A→R and R→A, other changes (to F or blank), blanks left, and manual labels
+already present at load (a resumed plane). The log is append-only and written outside
+the data folders; if its folder doesn't exist, or writing fails, Save still saves the
+labels and prints a note. This measures whether model-seeded review is fast enough.
+New helpers: `model_quality_csv_path(h5_file, tag)`, `append_review_log(row)`.
+
 ---
 
 ## filters.py

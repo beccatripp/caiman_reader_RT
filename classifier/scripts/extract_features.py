@@ -23,13 +23,6 @@ from cmclf.features import extract_plane_features, plane_checks
 from cmclf.model import feature_path
 
 
-def write_parquet(df, path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    df.to_parquet(tmp, index=False)
-    os.replace(tmp, path)
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
@@ -65,11 +58,11 @@ def main():
             if a.movie:
                 from cmclf.movie_features import extract_movie_features
                 df = extract_movie_features(plane, cfg["movie_features"], cfg["features"])
-                write_parquet(df, out)
+                io.write_parquet(df, out)
             else:
                 df, extra = extract_plane_features(plane, cfg["features"])
                 checks = plane_checks(plane, extra["geom"], extra["dff"])
-                write_parquet(df, out)
+                io.write_parquet(df, out)
                 with open(out.replace(".parquet", ".checks.json"), "w") as f:
                     json.dump(checks, f, indent=2)
                 print(f"  checks: {checks}")

@@ -5,6 +5,11 @@ output_root: /oscar/home/rtripp/data/rtripp/caiman_classifier_model
 
 random_seed: 0
 
+# Model family tag: apply.py writes <plane>/results_quality_model_<tag>.csv and
+# train.py stores it in metadata.json. Other families get their own tag
+# (xgboost-context, xgboost-pretrained, cnn-resnet, ...).
+model_tag: xgboost
+
 # Planes with complete manual labels (results_quality.csv). Only these are ever
 # used for training: a plane reviewed with caiman-reader --model-labels holds
 # model-seeded labels and must not be added here unless it was fully re-checked.

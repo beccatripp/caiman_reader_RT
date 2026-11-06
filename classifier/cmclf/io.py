@@ -16,7 +16,20 @@ from scipy.sparse import csc_matrix
 
 HDF5_NAME = "results.hdf5"
 MANUAL_CSV = "results_quality.csv"
-MODEL_CSV = "results_quality_model.csv"
+MODEL_CSV_PREFIX = "results_quality_model_"
+
+
+def model_csv_name(tag):
+    """results_quality_model_<tag>.csv: one file per model family (xgboost,
+    xgboost-context, ...), so several models' labels can sit in one plane folder."""
+    if not tag or "__" in tag or any(c in tag for c in "/\\ "):
+        raise ValueError(f"bad model tag {tag!r}")
+    return f"{MODEL_CSV_PREFIX}{tag}.csv"
+
+
+def model_tag(cfg, meta=None):
+    """Tag stored with the model, else config model_tag (older models have none)."""
+    return (meta or {}).get("tag") or cfg["model_tag"]
 
 CLASSIFIER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -97,6 +110,14 @@ def task_slice(items, task_id, chunk):
 
 
 # ── Label files (same format as caiman-reader's save_project) ───────────────
+
+def write_parquet(df, path):
+    """Write via a temporary file so a killed job never leaves a half-written cache."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    df.to_parquet(tmp, index=False)
+    os.replace(tmp, path)
+
 
 def read_labels(path):
     """[(roi_id, label), ...] in file order; label is '' for unreviewed."""

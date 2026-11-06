@@ -1,23 +1,29 @@
 #!/usr/bin/env python
-"""Apply a deployment model and write results_quality_model.csv to plane folders.
+"""Apply a deployment model and write results_quality_model_<tag>.csv to plane folders.
 
-The file has the same format as caiman-reader's results_quality.csv (no header,
-roi_id,A|R, one row per estimates/idx_components entry in that order).
+<tag> is the model family (metadata "tag", else model_tag in config.yaml), e.g.
+results_quality_model_xgboost.csv. The file has the same format as caiman-reader's
+results_quality.csv (no header, roi_id,A|R, one row per estimates/idx_components
+entry in that order).
 Probabilities go to <output_root>/predictions/<version>/<pid>.csv.
 
 Safety:
 - results_quality.csv is never written, renamed or deleted.
-- An existing results_quality_model.csv is skipped. With --replace it is first
-  renamed to results_quality_model_<version that wrote it>.csv (nothing deleted).
+- An existing results_quality_model_<tag>.csv is skipped. With --replace it is
+  first renamed to results_quality_model_<tag>__<version that wrote it>.csv
+  (nothing deleted). Other tags' files are never touched.
 - Planes with a manual results_quality.csv are skipped unless --include-labeled.
 - Every existing file in the plane folder is fingerprinted before and after; the
   run fails if anything other than the new file changed.
+- Core features are read from <output_root>/features/<pid>.parquet when cached,
+  otherwise computed and cached there (never in the plane folder).
 
   python apply.py --version v20261105 --plane /path/26-03-02-OLL/RB01/plane0 --dry-run
   python apply.py --version v20261105 --plane-list lists/unlabeled.txt --task-id 0 --chunk 5
 """
 import argparse
 import hashlib
+import json
 import os
 import sys
 import time
@@ -27,7 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import pandas as pd
 
 from cmclf import io, jobs, model
-from cmclf.features import extract_plane_features
+from cmclf.features import extract_plane_features, plane_checks
 from cmclf.movie_features import MOVIE_FEATURES
 
 HASH_MAX_BYTES = 20 * 2 ** 20
@@ -48,27 +54,55 @@ def fingerprint(fold):
     return fp
 
 
-def previous_version(cfg, pid):
-    """Version whose predictions file for this plane is most recent."""
+def version_tag(cfg, version):
+    try:
+        with open(os.path.join(cfg["output_root"], "models", version, "deploy", "metadata.json")) as f:
+            return io.model_tag(cfg, json.load(f))
+    except OSError:
+        return None
+
+
+def previous_version(cfg, pid, tag):
+    """Version of this tag whose predictions file for this plane is most recent."""
     root = os.path.join(cfg["output_root"], "predictions")
     hits = [(os.path.getmtime(os.path.join(root, v, f"{pid}.csv")), v)
             for v in (os.listdir(root) if os.path.isdir(root) else [])
-            if os.path.exists(os.path.join(root, v, f"{pid}.csv"))]
+            if os.path.exists(os.path.join(root, v, f"{pid}.csv")) and version_tag(cfg, v) == tag]
     return max(hits)[1] if hits else "unknown"
+
+
+def core_features(cfg, plane, a):
+    """Cached core features, else computed and cached (with the checks file)."""
+    path = model.feature_path(cfg, plane.pid)
+    if os.path.exists(path):
+        df = pd.read_parquet(path)
+        if list(df.sort_values("order_idx")["roi_id"]) == list(plane.idx):
+            return df
+        print(f"  cached features in {path} don't match idx_components; recomputing (cache left as is)")
+        return extract_plane_features(plane, cfg["features"])[0]
+    df, extra = extract_plane_features(plane, cfg["features"])
+    if not a.dry_run:
+        io.write_parquet(df, path)
+        checks = path.replace(".parquet", ".checks.json")
+        if not os.path.exists(checks):
+            with open(checks, "x") as f:
+                json.dump(plane_checks(plane, extra["geom"], extra["dff"]), f, indent=2)
+    return df
 
 
 def apply_plane(cfg, p, est, meta, a):
     fold = p["dir"]
-    out = os.path.join(fold, io.MODEL_CSV)
+    name = io.model_csv_name(meta["tag"])
+    out = os.path.join(fold, name)
     if os.path.exists(os.path.join(fold, io.MANUAL_CSV)) and not a.include_labeled:
         return "skipped: has manual labels (--include-labeled to apply anyway)"
     if os.path.exists(out) and not a.replace:
-        return f"skipped: {io.MODEL_CSV} exists (--replace to rename it and write a new one)"
+        return f"skipped: {name} exists (--replace to rename it and write a new one)"
 
     plane = io.load_plane(fold)
     if len(plane.idx) == 0:
         return "skipped: no accepted components"
-    df, _ = extract_plane_features(plane, cfg["features"])
+    df = core_features(cfg, plane, a)
     if any(f in MOVIE_FEATURES for f in meta["features"]):
         from cmclf.movie_features import extract_movie_features
         df = df.merge(extract_movie_features(plane, cfg["movie_features"], cfg["features"]), on="roi_id", how="left")
@@ -83,17 +117,17 @@ def apply_plane(cfg, p, est, meta, a):
     before = fingerprint(fold)
     renamed = None
     if os.path.exists(out):
-        old = previous_version(cfg, p["pid"])
-        renamed = f"results_quality_model_{old}.csv"
+        old = previous_version(cfg, p["pid"], meta["tag"])
+        renamed = name.replace(".csv", f"__{old}.csv")
         if os.path.exists(os.path.join(fold, renamed)):
-            renamed = f"results_quality_model_{old}_{time.strftime('%Y%m%d-%H%M%S')}.csv"
+            renamed = name.replace(".csv", f"__{old}_{time.strftime('%Y%m%d-%H%M%S')}.csv")
         os.rename(out, os.path.join(fold, renamed))
     io.write_labels(out, zip(plane.idx.tolist(), labels))
 
     pred_dir = os.path.join(cfg["output_root"], "predictions", meta["version"])
     os.makedirs(pred_dir, exist_ok=True)
     pd.DataFrame({"roi_id": plane.idx, "p_accept": p_acc, "label": labels, "threshold": meta["threshold"],
-                  "model_version": meta["version"]}).to_csv(os.path.join(pred_dir, f"{p['pid']}.csv"), index=False)
+                  "model_version": meta["version"], "model_tag": meta["tag"]}).to_csv(os.path.join(pred_dir, f"{p['pid']}.csv"), index=False)
 
     # Verify: output format, and nothing else in the folder changed
     back = io.read_labels(out)
@@ -101,14 +135,14 @@ def apply_plane(cfg, p, est, meta, a):
     after = fingerprint(fold)
     expected = dict(before)
     if renamed:
-        expected[renamed] = expected.pop(io.MODEL_CSV)
+        expected[renamed] = expected.pop(name)
     new = set(after) - set(expected)
     changed = [n for n in expected if n not in after or
                (after[n][0], after[n][2]) != (expected[n][0], expected[n][2]) or
                (n != renamed and after[n][1] != expected[n][1])]
-    if new != {io.MODEL_CSV} or changed:
+    if new != {name} or changed:
         raise RuntimeError(f"unexpected changes in {fold}: new={sorted(new)} changed={changed}")
-    return f"wrote {io.MODEL_CSV}" + (f" (previous renamed to {renamed})" if renamed else "") + ". " + msg
+    return f"wrote {name}" + (f" (previous renamed to {renamed})" if renamed else "") + ". " + msg
 
 
 def main():
@@ -127,6 +161,8 @@ def main():
     jobs.guard_login_node()
     cfg = io.load_config(a.config)
     est, meta = model.load_model(os.path.join(cfg["output_root"], "models", a.version, "deploy"))
+    meta["tag"] = io.model_tag(cfg, meta)
+    print(f"model {a.version}, tag {meta['tag']} -> {io.model_csv_name(meta['tag'])}")
     planes = [io.plane_from_dir(a.plane)] if a.plane else io.task_slice(
         io.read_plane_list(a.plane_list), jobs.task_id(a.task_id), a.chunk)
 

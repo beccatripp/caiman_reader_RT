@@ -18,15 +18,31 @@ from tkinter import font
 import csv
 from matplotlib.path import Path
 import sys
+import glob
+import time
+import getpass
+import datetime
 import filters
 
 initpath = os.path.dirname(os.path.abspath(__file__))
 
 # python caiman-reader.py --overlap-filter  -> also apply filters.ROISet
 USE_OVERLAP_FILTER = "--overlap-filter" in sys.argv
-# python caiman-reader.py --model-labels  -> start from the classifier's
-# results_quality_model.csv; Save still writes results_quality.csv
+# python caiman-reader.py --model-labels [TAG]  -> start from the classifier's
+# results_quality_model_<TAG>.csv (TAG can be left out when the folder has only
+# one model file); Save still writes results_quality.csv, and also appends a row
+# (time open, labels changed) to the review log
 USE_MODEL_LABELS = "--model-labels" in sys.argv
+MODEL_TAG = None
+if USE_MODEL_LABELS:
+    _i = sys.argv.index("--model-labels")
+    if _i + 1 < len(sys.argv) and not sys.argv[_i + 1].startswith("--"):
+        MODEL_TAG = sys.argv[_i + 1]
+REVIEW_LOG = os.environ.get("CMCLF_REVIEW_LOG",
+                            "/oscar/home/rtripp/data/rtripp/caiman_classifier_model/review_log.csv")
+REVIEW_LOG_FIELDS = ["saved_at", "loaded_at", "user", "plane_dir", "model_file", "minutes_open", "n_cells",
+                     "n_model_A", "n_saved_A", "n_A_to_R", "n_R_to_A", "n_other_changed", "n_blank",
+                     "n_manual_at_load"]
 
 # Must match OLL_Processing/oll_caiman_segmentation.py so the dF/F shown here
 # is the same one saved to traces_dff.npy
@@ -51,6 +67,7 @@ SCREEN_MARGIN_W = 40
 SCREEN_MARGIN_H = 100
 
 h5_path = None
+review = None  # --model-labels: load time and the model's labels, for the review log
 root = tk.Tk()
 root.title("CaImAn Reader")
 
@@ -98,9 +115,37 @@ def quality_csv_path(h5_file):
     return os.path.splitext(h5_file)[0] + "_quality.csv"
 
 
-def model_quality_csv_path(h5_file):
-    """results.hdf5 -> results_quality_model.csv (written by classifier/scripts/apply.py)."""
-    return os.path.splitext(h5_file)[0] + "_quality_model.csv"
+def model_quality_csv_path(h5_file, tag=None):
+    """results.hdf5 -> results_quality_model_<tag>.csv (written by
+    classifier/scripts/apply.py). Without a tag: the folder's only model file, or
+    None when there are none or several (archived <tag>__<version> files are ignored)."""
+    base = os.path.splitext(h5_file)[0] + "_quality_model"
+    if tag:
+        return f"{base}_{tag}.csv"
+    found = sorted(p for p in glob.glob(glob.escape(base) + "_*.csv") if "__" not in os.path.basename(p))
+    if len(found) > 1:
+        print("Several model label files, pick one with --model-labels TAG: " +
+              ", ".join(os.path.basename(p) for p in found))
+    return found[0] if len(found) == 1 else None
+
+
+def append_review_log(row):
+    """One row per Save in --model-labels mode. Append only; a failure here never
+    stops the labels being saved."""
+    try:
+        if not os.path.isdir(os.path.dirname(REVIEW_LOG)):
+            print(f"Review log folder not found ({os.path.dirname(REVIEW_LOG)}): review not logged")
+            return
+        new = not os.path.exists(REVIEW_LOG)
+        with open(REVIEW_LOG, "a", newline='') as f:
+            w = csv.DictWriter(f, fieldnames=REVIEW_LOG_FIELDS)
+            if new:
+                w.writeheader()
+            w.writerow(row)
+        print(f"Review logged: {row['minutes_open']} min, {row['n_A_to_R']} A->R, {row['n_R_to_A']} R->A "
+              f"-> {REVIEW_LOG}")
+    except OSError as e:
+        print(f"Review not logged: {e}")
 
 
 def read_quality_csv(path, quality_check, skip_blank=False):
@@ -169,7 +214,7 @@ def fit_scale(tif):
 
 
 def initialize_project():
-    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root, h5_path, rolling_window
+    global welcome, active_vid, folder, footprints, radiocanvas, scrollable_buttons, quality_check, traces, snr, rval, root, h5_path, rolling_window, review
 
     fold = filedialog.askdirectory(initialdir=initpath, title="Select Folder")
     if not fold:
@@ -232,19 +277,26 @@ def initialize_project():
     erase_history.clear()
     undo_button.config(state=tk.DISABLED)
     quality_csv = quality_csv_path(h5_file)
+    review = None
     if USE_MODEL_LABELS:
         # Model labels first, then any manual labels already saved on top, so a
         # partly corrected plane resumes where it was left
-        model_csv = model_quality_csv_path(h5_file)
-        if os.path.exists(model_csv):
+        model_csv = model_quality_csv_path(h5_file, MODEL_TAG)
+        if model_csv and os.path.exists(model_csv):
             print(f"Model labels: {read_quality_csv(model_csv, quality_check)} from {model_csv}")
+            review = dict(start=time.time(), loaded_at=datetime.datetime.now().isoformat(timespec="seconds"),
+                          model_file=os.path.basename(model_csv), model_labels=dict(quality_check),
+                          n_manual_at_load=0)
         else:
-            print(f"No {os.path.basename(model_csv)} in this folder: cells start unlabelled")
+            print(f"No {os.path.basename(model_csv) if model_csv else 'model label file'} in this folder: "
+                  f"cells start unlabelled")
     if not os.path.exists(quality_csv):
         print("NEW QUALITY CSV")
     else:
         n = read_quality_csv(quality_csv, quality_check, skip_blank=USE_MODEL_LABELS)
         print(f"Manual labels: {n} from {quality_csv}")
+        if review is not None:
+            review["n_manual_at_load"] = n
     if USE_MODEL_LABELS:
         print(f"Save writes {os.path.basename(quality_csv)} (the model file is never changed)")
 
@@ -644,6 +696,19 @@ def save_project():
         for k, v in quality_check.items():
             w.writerow([k, v])
     save_status.config(image=check)
+    if review is not None:
+        m = review["model_labels"]
+        saved = quality_check.values()
+        append_review_log(dict(
+            saved_at=datetime.datetime.now().isoformat(timespec="seconds"), loaded_at=review["loaded_at"],
+            user=getpass.getuser(), plane_dir=os.path.dirname(h5_path), model_file=review["model_file"],
+            minutes_open=round((time.time() - review["start"]) / 60, 1), n_cells=len(quality_check),
+            n_model_A=sum(v == 'A' for v in m.values()), n_saved_A=sum(v == 'A' for v in saved),
+            n_A_to_R=sum(m.get(k) == 'A' and v == 'R' for k, v in quality_check.items()),
+            n_R_to_A=sum(m.get(k) == 'R' and v == 'A' for k, v in quality_check.items()),
+            n_other_changed=sum(m.get(k, '') != v and {m.get(k, ''), v} != {'A', 'R'}
+                                for k, v in quality_check.items()),
+            n_blank=sum(v == '' for v in saved), n_manual_at_load=review["n_manual_at_load"]))
 
 def next_cell():
     global active_cell, footprints, quality, quality_check

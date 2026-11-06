@@ -144,8 +144,8 @@ def main():
         if os.path.exists(cv_path):
             cv = pd.read_csv(cv_path, index_col=0)
             cv_row = cv.loc[a.final_set].to_dict() if a.final_set in cv.index else None
-        meta = dict(version=a.version, feature_set=a.final_set, features=feats, threshold=info["threshold"],
-                    params=info["params"], n_estimators=info["n_estimators"],
+        meta = dict(version=a.version, tag=io.model_tag(cfg), feature_set=a.final_set, features=feats,
+                    threshold=info["threshold"], params=info["params"], n_estimators=info["n_estimators"],
                     inner_logloss=info["inner_logloss"], test_planes=sorted(test_ids),
                     n_cells=len(data), n_accept=int(y.sum()), cv_summary=cv_row, model_cfg=mcfg)
         model.save_model(os.path.join(mdir, "dev"), est, dict(meta, stage="dev", train_planes=sorted(set(g))))

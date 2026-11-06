@@ -3,7 +3,7 @@
 
   --locked-test   score models/<version>/dev on the locked test planes. Runs once
                   per version (refuses if a result exists, unless --force).
-  --compare       compare results_quality_model.csv with a manual
+  --compare       compare results_quality_model_<tag>.csv with a manual
                   results_quality.csv on the given planes (the prospective blind
                   check), against the pass bar in config.yaml.
 
@@ -48,13 +48,14 @@ def locked_test(cfg, version, force):
     print(f"-> {out}")
 
 
-def compare(cfg, version, planes, name):
+def compare(cfg, version, planes, name, tag):
+    model_csv = io.model_csv_name(tag)
     rows = []
     for pl in planes:
-        mpath = os.path.join(pl["dir"], io.MODEL_CSV)
+        mpath = os.path.join(pl["dir"], model_csv)
         hpath = os.path.join(pl["dir"], io.MANUAL_CSV)
         if not (os.path.exists(mpath) and os.path.exists(hpath)):
-            print(f"{pl['pid']}: needs both {io.MODEL_CSV} and {io.MANUAL_CSV}, skipping")
+            print(f"{pl['pid']}: needs both {model_csv} and {io.MANUAL_CSV}, skipping")
             continue
         m = pd.DataFrame(io.read_labels(mpath), columns=["roi_id", "model"])
         h = pd.DataFrame(io.read_labels(hpath), columns=["roi_id", "manual"])
@@ -100,6 +101,7 @@ def main():
     ap.add_argument("--plane-list")
     ap.add_argument("--plane", nargs="+")
     ap.add_argument("--name", default="prospective", help="output folder suffix for --compare")
+    ap.add_argument("--tag", help="model file tag for --compare (default: the version's tag)")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--config")
     a = ap.parse_args()
@@ -109,7 +111,9 @@ def main():
         locked_test(cfg, a.version, a.force)
     else:
         planes = io.read_plane_list(a.plane_list) if a.plane_list else [io.plane_from_dir(d) for d in a.plane or []]
-        compare(cfg, a.version, planes, a.name)
+        meta_path = os.path.join(cfg["output_root"], "models", a.version, "deploy", "metadata.json")
+        meta = json.load(open(meta_path)) if os.path.exists(meta_path) else None
+        compare(cfg, a.version, planes, a.name, a.tag or io.model_tag(cfg, meta))
 
 
 if __name__ == "__main__":
