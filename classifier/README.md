@@ -87,7 +87,11 @@ ablation, the same 6 locked test planes), trained on the planes in `training_set
 `config_xgboost-02.yaml`. `config.yaml` is unchanged, so the `xgboost` model is reproduced and applied as before.
 
 - **Label sources** (the sheet's `Seg Type`): `Relaxed Params` → `results_quality.csv` (46 manual planes);
-  `xgboost` → the newest `results_quality_model_xgboost_useredits[-vNN].csv` (81 planes corrected in the reader).
+  `xgboost` (81 planes) → the first file that exists of: the newest
+  `results_quality_model_xgboost_useredits[-vNN].csv` (corrected in the reader), `results_quality_model_xgboost.csv`
+  (cleared without edits), `results_quality.csv`. Every listed plane is cleared for training. The source used is
+  recorded per plane (`useredits:xgboost`, `model:xgboost`, `manual`); `check_training_set.py` flags planes
+  without an edits file as `NO_EDITS`.
 - **CV is also reported per label source** (`cv_summary_by_source.csv`). The corrected planes started from
   xgboost's labels, so they agree with it wherever a label wasn't changed, and CV on them is optimistic. Compare
   the two models on manual labels: the locked test (xgboost κ 0.70) and the manual planes' CV.

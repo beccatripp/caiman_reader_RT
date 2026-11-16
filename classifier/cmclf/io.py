@@ -163,21 +163,34 @@ def user_edits_versions(model_csv):
     return [versions[v] for v in sorted(versions)]
 
 
-def label_path(plane):
-    """Label file for a plane: results_quality.csv for label_source 'manual'
-    (the default), the newest results_quality_model_<tag>_useredits[-vNN].csv for
-    'useredits:<tag>'. Raises if the file is missing."""
+def resolve_labels(plane):
+    """(label file, source it came from) for a plane.
+    label_source 'manual' (the default): results_quality.csv.
+    label_source 'useredits:<tag>', first that exists:
+      newest results_quality_model_<tag>_useredits[-vNN].csv -> 'useredits:<tag>'
+      results_quality_model_<tag>.csv (cleared without edits) -> 'model:<tag>'
+      results_quality.csv                                     -> 'manual'
+    Raises FileNotFoundError if none exists."""
     source = plane.get("label_source", "manual")
+    manual = (os.path.join(plane["dir"], MANUAL_CSV), "manual")
     if source == "manual":
-        path = os.path.join(plane["dir"], MANUAL_CSV)
+        candidates = [manual]
     elif source.startswith("useredits:"):
-        found = user_edits_versions(os.path.join(plane["dir"], model_csv_name(source.split(":", 1)[1])))
-        path = found[-1] if found else os.path.join(plane["dir"], "<no " + source + " file>")
+        tag = source.split(":", 1)[1]
+        model_csv = os.path.join(plane["dir"], model_csv_name(tag))
+        candidates = [(p, source) for p in user_edits_versions(model_csv)[-1:]]
+        candidates += [(model_csv, f"model:{tag}"), manual]
     else:
         raise ValueError(f"unknown label_source {source!r}")
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"{plane['pid']}: label file for {source} not found: {path}")
-    return path
+    for path, src in candidates:
+        if os.path.exists(path):
+            return path, src
+    raise FileNotFoundError(f"{plane['pid']}: no label file for {source} in {plane['dir']}")
+
+
+def label_path(plane):
+    """Label file for a plane (see resolve_labels)."""
+    return resolve_labels(plane)[0]
 
 
 def read_labels(path):

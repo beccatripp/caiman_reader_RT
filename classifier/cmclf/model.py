@@ -20,7 +20,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from .features import CORE_FEATURES, FEATURE_GROUPS, REPLICA_FEATURES
-from .io import git_commit, label_path, read_labels
+from .io import git_commit, read_labels, resolve_labels
 from .movie_features import MOVIE_FEATURES
 
 FEATURE_SETS = {
@@ -68,12 +68,12 @@ def load_table(cfg, planes, with_movie=False, labels=True):
                 raise FileNotFoundError(f"{mpath} missing: run scripts/extract_features.py --movie first")
             df = df.merge(pd.read_parquet(mpath), on="roi_id", how="left")
         if labels:
-            lpath = label_path(p)
+            lpath, source = resolve_labels(p)
             lab = dict(read_labels(lpath))
             df["label"] = df["roi_id"].map(lab).fillna("missing").replace("", "blank")
-            df["label_source"] = p.get("label_source", "manual")
+            df["label_source"] = source
             vc = df["label"].value_counts()
-            summary.append(dict(pid=p["pid"], label_source=p.get("label_source", "manual"),
+            summary.append(dict(pid=p["pid"], label_source=source,
                                 label_file=os.path.basename(lpath),
                                 n_rows=len(df), n_A=int(vc.get("A", 0)), n_R=int(vc.get("R", 0)),
                                 n_blank=int(vc.get("blank", 0)), n_F=int(vc.get("F", 0)),

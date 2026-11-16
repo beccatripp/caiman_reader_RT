@@ -360,7 +360,9 @@ lists the newest file first (by modification time) and preselects it, or its new
 `_useredits` version if you have saved edits for it. Manual labels and older models are
 still listed. Each model's edits stay separate (`..._xgboost_useredits.csv`,
 `..._xgboost-02_useredits.csv`). Training and the model files are described in
-`classifier/README.md` ("xgboost-02").
+`classifier/README.md` ("xgboost-02"). For training, a plane listed as `xgboost` uses its
+newest edits file, else the `xgboost` model file (cleared without edits), else
+`results_quality.csv`.
 
 ---
 

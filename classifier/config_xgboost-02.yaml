@@ -17,7 +17,9 @@ model_tag: xgboost-02
 # "Segmentation Manual Review - xgboost-02-training" sheet. Seg Type gives the label file:
 #   Relaxed Params -> results_quality.csv (manual review)
 #   xgboost        -> newest results_quality_model_xgboost_useredits[-vNN].csv
-#                     (xgboost's labels, corrected in caiman-reader)
+#                     (xgboost's labels, corrected in caiman-reader); if there is none,
+#                     results_quality_model_xgboost.csv (cleared without edits), then
+#                     results_quality.csv (cmclf.io.resolve_labels)
 # Relative to this file.
 training_set: training_sets/xgboost-02.csv
 training_set_sources:

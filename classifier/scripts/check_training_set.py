@@ -2,11 +2,14 @@
 """Check the training planes' label files before training. Read-only and light
 (reads small CSVs, only checks that results.hdf5 exists), so it can run anywhere.
 
-For each training plane: the label file train.py will use, A / R / blank / F
-counts and, for model-seeded planes, how many labels differ from the model file.
+For each training plane: the label file train.py will use and the source it
+counts as (xgboost planes: useredits, else the model file, else manual; see
+io.resolve_labels), A / R / blank / F counts and, for edited planes, how many
+labels differ from the model file.
 Flags:
   NO_HDF5          no results.hdf5 in the plane folder
-  NO_LABELS        the label file for its label source is missing
+  NO_LABELS        no usable label file at all
+  NO_EDITS         seeded plane without a _useredits file; the model or manual file is used
   ALSO_MANUAL      seeded plane that also has a manual results_quality.csv
   ALSO_EDITS       manual plane that also has a _useredits file
   EDIT_VERSIONS    several _useredits versions; the newest is used
@@ -31,17 +34,17 @@ from cmclf import io
 
 def check(p):
     fold = p["dir"]
-    source = p.get("label_source", "manual")
-    row = dict(pid=p["pid"], label_source=source, label_file="", n_A=0, n_R=0, n_blank=0, n_F=0,
+    listed = p.get("label_source", "manual")
+    row = dict(pid=p["pid"], label_source=listed, label_file="", n_A=0, n_R=0, n_blank=0, n_F=0,
                n_changed_from_model="", flags=[])
     if not os.path.exists(os.path.join(fold, io.HDF5_NAME)):
         row["flags"].append("NO_HDF5")
     try:
-        path = io.label_path(p)
+        path, source = io.resolve_labels(p)
     except FileNotFoundError:
         row["flags"].append("NO_LABELS")
         return row
-    row["label_file"] = os.path.basename(path)
+    row.update(label_source=source, label_file=os.path.basename(path))
     labels = io.read_labels(path)
     counts = collections.Counter(v for _, v in labels)
     row.update(n_A=counts["A"], n_R=counts["R"], n_blank=counts[""], n_F=counts["F"])
@@ -49,9 +52,12 @@ def check(p):
         row["flags"].append("BLANKS")
 
     edits = glob.glob(os.path.join(glob.escape(fold), io.MODEL_CSV_PREFIX + "*" + io.USER_EDITS_SUFFIX + "*.csv"))
-    if source == "manual":
+    if listed == "manual":
         if edits:
             row["flags"].append("ALSO_EDITS")
+        return row
+    if source != listed:
+        row["flags"].append("NO_EDITS")
         return row
     if os.path.exists(os.path.join(fold, io.MANUAL_CSV)):
         row["flags"].append("ALSO_MANUAL")
@@ -92,7 +98,7 @@ def main():
     seeded = df[df["n_changed_from_model"] != ""]
     if len(seeded):
         ch = seeded["n_changed_from_model"].astype(int)
-        print(f"Seeded planes: {ch.sum()} labels changed from the model "
+        print(f"Edited planes: {ch.sum()} labels changed from the model "
               f"(median {ch.median():.0f} per plane, {int((ch == 0).sum())} planes unchanged)")
     flags = collections.Counter(f for fl in df["flags"] for f in fl.split())
     print("Flags: " + (", ".join(f"{f} {n}" for f, n in sorted(flags.items())) or "none"))
