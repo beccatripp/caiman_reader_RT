@@ -58,9 +58,9 @@ def make_root(d):
 def test_real_training_set():
     cfg = io.load_config(os.path.join(CLASSIFIER, "config_xgboost-02.yaml"))
     train, test, dev = io.training_planes(cfg), io.test_planes(cfg), io.dev_planes(cfg)
-    assert (len(train), len(test), len(dev)) == (127, 6, 121)
+    assert (len(train), len(test), len(dev)) == (125, 6, 119)
     sources = [p["label_source"] for p in train]
-    assert sources.count("manual") == 46 and sources.count("useredits:xgboost") == 81
+    assert sources.count("manual") == 46 and sources.count("useredits:xgboost") == 79
     assert all(p["label_source"] == "manual" for p in test)
     # The old config is unchanged: 45 manual planes
     old = io.load_config()

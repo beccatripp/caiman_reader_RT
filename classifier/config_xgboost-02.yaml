@@ -5,7 +5,7 @@ output_root: /oscar/home/rtripp/data/rtripp/caiman_classifier_model
 
 random_seed: 0
 
-# xgboost-02: same procedure as xgboost (config.yaml), trained on 127 planes.
+# xgboost-02: same procedure as xgboost (config.yaml), trained on 125 planes.
 # Use with --config classifier/config_xgboost-02.yaml for every script. config.yaml
 # stays as it was: v20261105_kappa has no tag in its metadata and takes model_tag
 # from config.yaml.

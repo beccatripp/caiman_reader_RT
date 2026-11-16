@@ -79,7 +79,7 @@ grep -h -E "wrote|skipped|Failed" $OUT/logs/cmclf_apply_*.out | sort | uniq -c |
 `--include-labeled`. Run a single plane with `apply.py --version $V --plane DIR`, and add `--dry-run` to print
 the counts without writing anything.
 
-## xgboost-02: retrained on 127 planes
+## xgboost-02: retrained on 125 planes
 
 Same procedure as `xgboost` (features, grid, kappa threshold, nested leave-one-plane-out CV, leave-one-animal-out,
 ablation, the same 6 locked test planes), trained on the planes in `training_sets/xgboost-02.csv` (the
@@ -87,7 +87,7 @@ ablation, the same 6 locked test planes), trained on the planes in `training_set
 `config_xgboost-02.yaml`. `config.yaml` is unchanged, so the `xgboost` model is reproduced and applied as before.
 
 - **Label sources** (the sheet's `Seg Type`): `Relaxed Params` → `results_quality.csv` (46 manual planes);
-  `xgboost` (81 planes) → the first file that exists of: the newest
+  `xgboost` (79 planes) → the first file that exists of: the newest
   `results_quality_model_xgboost_useredits[-vNN].csv` (corrected in the reader), `results_quality_model_xgboost.csv`
   (cleared without edits), `results_quality.csv`. Every listed plane is cleared for training. The source used is
   recorded per plane (`useredits:xgboost`, `model:xgboost`, `manual`); `check_training_set.py` flags planes
@@ -108,13 +108,13 @@ V=xgboost-02
 python classifier/scripts/check_training_set.py --config $C --out $OUT/lists/xgboost-02_training_check.csv
 
 # 1. Features for training planes not cached yet (cached planes are skipped)
-sbatch --array=0-126 classifier/slurm/extract_features.sbatch --config $C --training
+sbatch --array=0-124 classifier/slurm/extract_features.sbatch --config $C --training
 
 # 2. Smoke test in an interact session (one grid point, 3 inner folds, a few minutes)
 interact -n 8 -m 32g -t 1:00:00
 python classifier/scripts/train.py --config $C --version ${V}_quick --quick --stages final --n-jobs 8
 
-# 3. Full run: 121 dev planes (39 for xgboost), so one job per stage with more CPUs and time
+# 3. Full run: 119 dev planes (39 for xgboost), so one job per stage with more CPUs and time
 sbatch -c 32 --mem=64G -t 24:00:00 classifier/slurm/train.sbatch --config $C --version $V --stages cv
 sbatch -c 32 --mem=64G -t 12:00:00 classifier/slurm/train.sbatch --config $C --version $V --stages loao,final
 sbatch -c 32 --mem=64G -t 48:00:00 classifier/slurm/train.sbatch --config $C --version $V --stages ablation
