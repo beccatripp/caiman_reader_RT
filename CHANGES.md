@@ -353,6 +353,15 @@ edits are never overwritten. `--model-labels TAG` resumes the newest version. Ot
 containing `_useredits` are not offered as sources, and `classifier/cmclf/io.py` rejects
 model tags containing `_useredits`.
 
+### 18. xgboost-02 and the newest model by default
+
+When a plane has several model files (e.g. `xgboost` and `xgboost-02`), the choice window
+lists the newest file first (by modification time) and preselects it, or its newest
+`_useredits` version if you have saved edits for it. Manual labels and older models are
+still listed. Each model's edits stay separate (`..._xgboost_useredits.csv`,
+`..._xgboost-02_useredits.csv`). Training and the model files are described in
+`classifier/README.md` ("xgboost-02").
+
 ---
 
 ## filters.py

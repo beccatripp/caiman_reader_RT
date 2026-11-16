@@ -136,7 +136,8 @@ def user_edits_csv_path(model_csv, version=1):
 
 def user_edits_versions(model_csv):
     """Existing _useredits files of a model file, oldest version first, and the
-    path the next new version would get."""
+    path the next new version would get. Same rule as user_edits_versions in
+    classifier/cmclf/io.py, which picks the newest version for training."""
     versions = {}
     for p in glob.glob(glob.escape(os.path.splitext(model_csv)[0] + USER_EDITS_SUFFIX) + "*.csv"):
         m = re.fullmatch(re.escape(USER_EDITS_SUFFIX) + r"(?:-v(\d+))?\.csv",
@@ -173,8 +174,13 @@ def choose_label_source(h5_file):
     options = []
     if os.path.exists(quality_csv_path(h5_file)):
         options.append(((None, None), os.path.basename(quality_csv_path(h5_file)) + "  (manual labels)"))
-    for p in model_quality_csvs(h5_file):
+    # Newest model file first (e.g. xgboost-02 before xgboost), and preselected:
+    # its newest edits if you have saved any, else the model's own labels
+    default = None
+    for p in sorted(model_quality_csvs(h5_file), key=os.path.getmtime, reverse=True):
         found, new = user_edits_versions(p)
+        if default is None:
+            default = len(options)
         for e in reversed(found):
             options.append(((p, e), os.path.basename(e) + "  (model labels + your edits)"))
         options.append(((p, new), os.path.basename(p) + "  (model labels" +
@@ -187,7 +193,7 @@ def choose_label_source(h5_file):
     dlg = tk.Toplevel(root)
     dlg.title("Choose labels")
     tk.Label(dlg, text="This plane has more than one set of labels. Start from:", justify=tk.LEFT).pack(anchor="w", padx=10, pady=(10, 4))
-    pick = tk.IntVar(value=0)
+    pick = tk.IntVar(value=default or 0)
     for i, (_, text) in enumerate(options):
         tk.Radiobutton(dlg, text=text, variable=pick, value=i).pack(anchor="w", padx=20)
     tk.Label(dlg, text="Starting from a model file, Save writes its _useredits file;\nthe model's own file is never changed.",

@@ -6,6 +6,7 @@ because it builds its Tk window at import time."""
 import csv
 import glob
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 
@@ -37,8 +38,11 @@ CLASSIFIER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_config(path=None):
-    with open(path or os.path.join(CLASSIFIER_DIR, "config.yaml")) as f:
-        return yaml.safe_load(f)
+    path = os.path.abspath(path or os.path.join(CLASSIFIER_DIR, "config.yaml"))
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    cfg["_config_path"] = path
+    return cfg
 
 
 def git_commit():
@@ -74,17 +78,42 @@ def _expand(cfg, key):
     return sorted(out, key=lambda p: p["pid"])
 
 
+def _read_training_set(cfg):
+    """config training_set CSV (Mouse, Plane, Date, ..., Seg Type) -> plane dicts
+    with label_source from training_set_sources."""
+    path = os.path.join(os.path.dirname(cfg["_config_path"]), cfg["training_set"])
+    sources = cfg["training_set_sources"]
+    out = []
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            seg = row["Seg Type"].strip()
+            if seg not in sources:
+                raise ValueError(f"{path}: Seg Type {seg!r} not in training_set_sources")
+            fold = os.path.join(cfg["data_root"], f"{row['Date'].strip()}-OLL", row["Mouse"].strip(),
+                                f"plane{row['Plane'].strip()}")
+            out.append(dict(plane_from_dir(fold), label_source=sources[seg]))
+    pids = [p["pid"] for p in out]
+    dups = sorted({p for p in pids if pids.count(p) > 1})
+    if dups:
+        raise ValueError(f"{path}: planes listed more than once: {dups}")
+    return sorted(out, key=lambda p: p["pid"])
+
+
 def training_planes(cfg):
-    return _expand(cfg, "training_planes")
+    """Planes with labels: training_set (CSV, with each plane's label source) when
+    the config has one, else training_planes (all manual)."""
+    if cfg.get("training_set"):
+        return _read_training_set(cfg)
+    return [dict(p, label_source="manual") for p in _expand(cfg, "training_planes")]
 
 
 def test_planes(cfg):
     test = _expand(cfg, "test_planes")
-    train_ids = {p["pid"] for p in training_planes(cfg)}
-    missing = [p["pid"] for p in test if p["pid"] not in train_ids]
+    train = {p["pid"]: p for p in training_planes(cfg)}
+    missing = [p["pid"] for p in test if p["pid"] not in train]
     if missing:
         raise ValueError(f"test_planes not in training_planes: {missing}")
-    return test
+    return [train[p["pid"]] for p in test]
 
 
 def dev_planes(cfg):
@@ -119,6 +148,36 @@ def write_parquet(df, path):
     tmp = path + ".tmp"
     df.to_parquet(tmp, index=False)
     os.replace(tmp, path)
+
+
+def user_edits_versions(model_csv):
+    """caiman-reader's corrections of a model file, oldest version first:
+    results_quality_model_<tag>_useredits.csv (version 1), ..._useredits-v02.csv, ...
+    Same rule as user_edits_versions in caiman-reader.py."""
+    stem = os.path.splitext(model_csv)[0] + USER_EDITS_SUFFIX
+    versions = {}
+    for p in glob.glob(glob.escape(stem) + "*.csv"):
+        m = re.fullmatch(r"(?:-v(\d+))?\.csv", p[len(stem):])
+        if m:
+            versions[int(m.group(1) or 1)] = p
+    return [versions[v] for v in sorted(versions)]
+
+
+def label_path(plane):
+    """Label file for a plane: results_quality.csv for label_source 'manual'
+    (the default), the newest results_quality_model_<tag>_useredits[-vNN].csv for
+    'useredits:<tag>'. Raises if the file is missing."""
+    source = plane.get("label_source", "manual")
+    if source == "manual":
+        path = os.path.join(plane["dir"], MANUAL_CSV)
+    elif source.startswith("useredits:"):
+        found = user_edits_versions(os.path.join(plane["dir"], model_csv_name(source.split(":", 1)[1])))
+        path = found[-1] if found else os.path.join(plane["dir"], "<no " + source + " file>")
+    else:
+        raise ValueError(f"unknown label_source {source!r}")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{plane['pid']}: label file for {source} not found: {path}")
+    return path
 
 
 def read_labels(path):

@@ -28,7 +28,8 @@ outputs (`OLL_Processing/oll_caiman_segmentation.py`). Full list of changes: `CH
 - Review labels are saved to `results_quality.csv` in the plane folder
 - Classifier labels (`results_quality_model_<TAG>.csv`, see `classifier/README.md`) are loaded by default. If the
   folder has only one label file it is used; if it has several (manual labels, more than one model) a window
-  asks which to start from. The window title shows the file in use. Starting from a model file:
+  asks which to start from, with the newest model (e.g. `xgboost-02`) preselected. The window title shows the
+  file in use. Starting from a model file:
   - Save writes `results_quality_model_<TAG>_useredits.csv`; the model's own file is never changed
   - Reopening the plane asks whether to resume one of your edits files (Save writes that file again) or to start
     from the model labels only (Save writes a new version, `_useredits-v02.csv`, `-v03`, ..., so earlier edits

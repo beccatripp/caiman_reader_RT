@@ -20,7 +20,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from .features import CORE_FEATURES, FEATURE_GROUPS, REPLICA_FEATURES
-from .io import MANUAL_CSV, git_commit, read_labels
+from .io import git_commit, label_path, read_labels
 from .movie_features import MOVIE_FEATURES
 
 FEATURE_SETS = {
@@ -68,10 +68,14 @@ def load_table(cfg, planes, with_movie=False, labels=True):
                 raise FileNotFoundError(f"{mpath} missing: run scripts/extract_features.py --movie first")
             df = df.merge(pd.read_parquet(mpath), on="roi_id", how="left")
         if labels:
-            lab = dict(read_labels(os.path.join(p["dir"], MANUAL_CSV)))
+            lpath = label_path(p)
+            lab = dict(read_labels(lpath))
             df["label"] = df["roi_id"].map(lab).fillna("missing").replace("", "blank")
+            df["label_source"] = p.get("label_source", "manual")
             vc = df["label"].value_counts()
-            summary.append(dict(pid=p["pid"], n_rows=len(df), n_A=int(vc.get("A", 0)), n_R=int(vc.get("R", 0)),
+            summary.append(dict(pid=p["pid"], label_source=p.get("label_source", "manual"),
+                                label_file=os.path.basename(lpath),
+                                n_rows=len(df), n_A=int(vc.get("A", 0)), n_R=int(vc.get("R", 0)),
                                 n_blank=int(vc.get("blank", 0)), n_F=int(vc.get("F", 0)),
                                 n_missing=int(vc.get("missing", 0)),
                                 n_csv_not_in_idx=len(set(lab) - set(df["roi_id"]))))
@@ -189,7 +193,8 @@ def _outer_fold(data, features, kind, outer_col, held_out, mcfg, seed):
     y = data["y"].to_numpy()
     predict, info, _ = fit_model(kind, X[tr], y[tr], data["pid"].to_numpy()[tr], mcfg, seed)
     p = predict(X[te])
-    out = data.loc[te, ["pid", "mouse", "plane", "roi_id", "y"]].copy()
+    keep = ["pid", "mouse", "plane", "roi_id", "y"] + (["label_source"] if "label_source" in data else [])
+    out = data.loc[te, keep].copy()
     out["p"] = p
     out["threshold"] = info["threshold"]
     out["pred"] = (p >= info["threshold"]).astype(int)

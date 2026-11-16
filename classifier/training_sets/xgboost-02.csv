@@ -1,0 +1,128 @@
+Mouse,Plane,Date,Status,Seg Type,Reviewed On
+RB01,0,26-02-28,Processed,xgboost,26-11-13
+RB01,0,26-03-02,Processed,xgboost,26-11-13
+RB01,0,26-03-04,Processed,xgboost,26-11-13
+RB01,0,26-03-06,Processed,xgboost,26-11-13
+RB01,0,26-03-09,Processed,xgboost,26-11-13
+RB01,0,26-03-12,"Processed, Training Set",Relaxed Params,26-10-26
+RB01,0,26-03-14,Processed,xgboost,26-11-13
+RB01,0,26-03-16,Processed,xgboost,26-11-13
+RB01,0,26-03-20,Processed,xgboost,26-11-16
+RB01,0,26-03-22,"Processed, Training Set",Relaxed Params,26-10-26
+RB01,0,26-03-24,Processed,xgboost,26-11-16
+RB01,0,26-03-27,Processed,xgboost,26-11-16
+RB01,0,26-03-30,Processed,xgboost,26-11-16
+RB01,0,26-04-02,"Processed, Recently Found",xgboost,26-11-16
+RB01,0,26-04-04,Processed,xgboost,26-11-16
+RB01,0,26-04-06,"Processed, Training Set",Relaxed Params,26-10-26
+RB01,0,26-04-07,"Processed, Training Set",Relaxed Params,26-10-26
+RB01,0,26-04-09,"Processed, Training Set",Relaxed Params,26-10-26
+RB01,0,26-04-11,Processed,xgboost,26-10-26
+RB01,1,26-04-08,"Processed, Training Set",Relaxed Params,26-11-02
+RB05,0,26-02-28,"Processed, Training Set",Relaxed Params,26-10-27
+RB05,0,26-03-02,Processed,xgboost,26-11-13
+RB05,0,26-03-04,Processed,xgboost,26-11-13
+RB05,0,26-03-06,"Processed, Training Set",Relaxed Params,26-10-26
+RB05,0,26-03-09,Processed,xgboost,26-11-13
+RB05,0,26-03-11,"Processed, Training Set",Relaxed Params,26-10-27
+RB05,0,26-03-13,Processed,xgboost,26-11-13
+RB05,0,26-03-15,Processed,xgboost,26-11-13
+RB05,0,26-03-19,Processed,xgboost,26-11-13
+RB05,0,26-03-21,"Processed, Training Set",Relaxed Params,26-10-26
+RB05,0,26-03-24,Processed,xgboost,26-11-13
+RB05,0,26-03-26,Processed,xgboost,26-11-13
+RB05,0,26-03-30,Processed,xgboost,26-11-13
+RB05,0,26-04-02,"Processed, Recently Found",xgboost,26-11-13
+RB05,0,26-04-04,Processed,xgboost,26-11-13
+RB05,0,26-04-06,Processed,xgboost,26-11-13
+RB05,0,26-04-08,Processed,xgboost,26-11-13
+RB05,0,26-04-10,"Processed, Training Set",Relaxed Params,26-10-27
+RB05,1,26-04-01,"Processed, Training Set",Relaxed Params,26-11-02
+RB06,0,26-02-24,Processed,xgboost,26-11-06
+RB06,0,26-02-28,Processed,xgboost,26-11-06
+RB06,0,26-03-01,Processed,xgboost,26-11-06
+RB06,0,26-03-02,Processed,xgboost,26-11-06
+RB06,0,26-03-03,"Processed, Training Set",Relaxed Params,26-10-26
+RB06,0,26-03-04,Processed,xgboost,26-11-06
+RB06,0,26-03-05,Processed,xgboost,26-11-06
+RB06,0,26-03-06,Processed,xgboost,26-11-06
+RB06,0,26-03-08,Processed,xgboost,26-11-06
+RB06,0,26-03-09,"Processed, Training Set",Relaxed Params,26-10-05
+RB06,0,26-03-10,"Processed, Training Set",Relaxed Params,26-10-06
+RB06,0,26-03-11,"Processed, Training Set",Relaxed Params,26-09-27
+RB06,0,26-03-12,"Processed, Training Set",Relaxed Params,26-09-27
+RB06,0,26-03-13,Processed,xgboost,26-11-06
+RB06,0,26-03-14,Processed,xgboost,26-11-06
+RB06,0,26-03-15,"Processed, Training Set",Relaxed Params,26-10-06
+RB06,0,26-03-16,Processed,xgboost,26-11-06
+RB06,0,26-03-19,Processed,xgboost,26-11-06
+RB06,0,26-03-20,Processed,xgboost,26-11-06
+RB06,0,26-03-21,"Processed, Training Set",Relaxed Params,26-10-06
+RB06,0,26-03-22,Processed,xgboost,26-11-06
+RB06,0,26-03-24,"Processed, Training Set",Relaxed Params,26-10-06
+RB06,0,26-03-26,Processed,xgboost,26-11-10
+RB06,0,26-03-27,"Processed, Training Set",Relaxed Params,26-10-06
+RB06,0,26-03-29,Processed,xgboost,26-11-10
+RB06,0,26-03-30,Processed,xgboost,26-11-10
+RB06,0,26-04-01,"Processed, Training Set",Relaxed Params,26-10-13
+RB06,0,26-04-03,Processed,xgboost,26-11-10
+RB06,0,26-04-04,"Processed, Training Set",Relaxed Params,26-10-26/13
+RB06,0,26-04-05,"Processed, Training Set",Relaxed Params,26-10-13
+RB06,0,26-04-06,Processed,xgboost,26-11-10
+RB06,0,26-04-07,"Processed, Training Set",Relaxed Params,26-10-13
+RB06,0,26-04-08,Processed,xgboost,26-11-10
+RB06,0,26-04-09,"Processed, Training Set",Relaxed Params,26-10-13
+RB06,0,26-04-10,Processed,xgboost,26-11-10
+RB06,0,26-04-11,"Processed, Training Set",Relaxed Params,26-10-13
+RB06,1,26-03-29,"Processed, Training Set",Relaxed Params,26-11-02
+RB06,1,26-04-01,Processed,xgboost,26-11-10
+RB06,1,26-04-04,Processed,xgboost,26-11-10
+RB06,1,26-04-06,Processed,xgboost,26-11-10
+RB06,1,26-04-08,Processed,xgboost,26-11-10
+RB07,0,26-02-28,Processed,xgboost,26-11-16
+RB07,0,26-03-02,Processed,xgboost,26-11-16
+RB07,0,26-03-04,Processed,xgboost,26-11-16
+RB07,0,26-03-06,Processed,xgboost,26-11-16
+RB07,0,26-03-09,"Processed, Training Set",Relaxed Params,26-10-28
+RB07,0,26-03-11,Processed,xgboost,26-11-16
+RB07,0,26-03-13,Processed,xgboost,26-11-16
+RB07,0,26-03-15,"Processed, Training Set",Relaxed Params,26-10-28
+RB07,0,26-03-19,Processed,xgboost,26-11-16
+RB07,0,26-03-21,Processed,xgboost,26-11-16
+RB07,0,26-03-26,Processed,xgboost,26-11-16
+RB07,0,26-03-30,"Processed, Training Set",Relaxed Params,26-10-27
+RB07,0,26-04-01,Processed,Relaxed Params,26-10-28
+RB07,0,26-04-03,Processed,xgboost,26-11-16
+RB07,0,26-04-05,Processed,xgboost,26-11-16
+RB07,0,26-04-07,Processed,xgboost,26-11-16
+RB07,0,26-04-10,"Processed, Training Set",Relaxed Params,26-10-27
+RB07,1,26-03-27,Processed,Relaxed Params,26-11-02
+RB08,0,26-02-28,Processed,xgboost,26-11-13
+RB08,0,26-03-02,Processed,xgboost,26-11-13
+RB08,0,26-03-04,"Processed, Training Set",Relaxed Params,26-10-29
+RB08,0,26-03-05,"Processed, Training Set",Relaxed Params,26-10-28/29
+RB08,0,26-03-08,Processed,xgboost,26-11-13
+RB08,0,26-03-10,Processed,xgboost,26-11-13
+RB08,0,26-03-13,"Processed, Training Set",Relaxed Params,26-10-28
+RB08,0,26-03-16,"Processed, Training Set",Relaxed Params,26-10-29
+RB08,0,26-03-21,"Processed, Training Set",Relaxed Params,26-10-28
+RB08,1,26-03-14,"Processed, Training Set",Relaxed Params,26-11-02
+RB09,0,26-02-24,Processed,xgboost,26-11-13
+RB09,0,26-03-01,"Processed, Training Set",Relaxed Params,26-10-29
+RB09,0,26-03-04,Processed,xgboost,26-11-13
+RB09,0,26-03-06,Processed,xgboost,26-11-13
+RB09,0,26-03-10,"Processed, Training Set",Relaxed Params,26-10-30
+RB09,0,26-03-12,Processed,xgboost,26-11-13
+RB09,0,26-03-14,Processed,xgboost,26-11-11
+RB09,0,26-03-16,Processed,xgboost,26-11-11
+RB09,0,26-03-20,Processed,xgboost,26-11-11
+RB09,0,26-03-22,"Processed, Training Set",Relaxed Params,26-10-29
+RB09,0,26-03-24,Processed,xgboost,26-11-11
+RB09,0,26-03-26,Processed,xgboost,26-11-11
+RB09,0,26-03-29,"Processed, Training Set",Relaxed Params,26-11-02
+RB09,0,26-04-01,Processed,xgboost,26-11-11
+RB09,0,26-04-03,Processed,xgboost,26-11-11
+RB09,0,26-04-05,Processed,xgboost,26-11-11
+RB09,0,26-04-08,"Processed, Training Set",Relaxed Params,26-11-02
+RB09,0,26-04-10,Processed,xgboost,26-11-11
+RB09,1,26-02-24,"Processed, Training Set",Relaxed Params,26-11-02

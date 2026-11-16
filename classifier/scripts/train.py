@@ -66,16 +66,25 @@ def main():
 
     rep = os.path.join(cfg["output_root"], "reports", a.version)
     mdir = os.path.join(cfg["output_root"], "models", a.version)
+    # Never overwrite a finished stage (or another version's model): stages can be
+    # run as separate jobs, each refusing if its own output already exists
+    done = {"cv": os.path.join(rep, "cv_summary.csv"), "loao": os.path.join(rep, "loao_summary.csv"),
+            "ablation": os.path.join(rep, "ablation_summary.csv"), "final": mdir}
+    clash = [f"{s}: {done[s]}" for s in stages if s in done and os.path.exists(done[s])]
+    if clash:
+        sys.exit("Already exists, refusing to overwrite (choose another --version):\n  " + "\n  ".join(clash))
     os.makedirs(rep, exist_ok=True)
     test_ids = {p["pid"] for p in io.test_planes(cfg)}
     dev = io.dev_planes(cfg)
     data, label_summary = model.load_table(cfg, dev, with_movie=a.with_movie)
     assert not set(data["pid"]) & test_ids, "locked test planes leaked into the dev data"
-    report.write_table(label_summary.set_index("pid"), os.path.join(rep, "label_summary_dev.csv"))
+    if not os.path.exists(os.path.join(rep, "label_summary_dev.csv")):
+        report.write_table(label_summary.set_index("pid"), os.path.join(rep, "label_summary_dev.csv"))
     print(f"Dev: {data['pid'].nunique()} planes, {len(data)} cells, {data['y'].sum()} accepted "
           f"({100 * data['y'].mean():.1f}%); excluded: {label_summary[['n_blank', 'n_F', 'n_missing']].sum().to_dict()}")
+    print("Label sources (planes): " + label_summary["label_source"].value_counts().to_dict().__str__())
     print(f"Locked test planes (not loaded): {sorted(test_ids)}")
-    with open(os.path.join(rep, "run_args.json"), "w") as f:
+    with open(os.path.join(rep, f"run_args_{'_'.join(stages)}.json"), "w") as f:
         json.dump(dict(vars(a), model_cfg=mcfg, git_commit=io.git_commit()), f, indent=2)
 
     cv_dir = os.path.join(rep, "cv")
@@ -98,6 +107,13 @@ def main():
             rows.append(report.summarize(preds[name], name))
             report.write_table(report.per_group(preds[name], "pid"), os.path.join(cv_dir, f"per_plane_{name}.csv"))
         summary = pd.DataFrame(rows).set_index("model")
+        # Model-seeded labels agree with the seeding model wherever they weren't
+        # corrected, so CV on those planes is optimistic: report each source alone
+        if data["label_source"].nunique() > 1:
+            by_source = [dict(report.summarize(oof[oof["label_source"] == src], name), label_source=src,
+                              n_planes=oof.loc[oof["label_source"] == src, "pid"].nunique())
+                         for name, oof in preds.items() for src in sorted(oof["label_source"].unique())]
+            report.write_table(pd.DataFrame(by_source).set_index("model"), os.path.join(rep, "cv_summary_by_source.csv"))
         report.write_table(summary, os.path.join(rep, "cv_summary.csv"))
         report.plot_curves(preds, os.path.join(rep, "cv_roc_pr.png"))
         best = a.final_set if a.final_set in preds else "full"
@@ -148,7 +164,8 @@ def main():
                     threshold=info["threshold"], params=info["params"], n_estimators=info["n_estimators"],
                     inner_logloss=info["inner_logloss"], test_planes=sorted(test_ids),
                     n_cells=len(data), n_accept=int(y.sum()), cv_summary=cv_row, model_cfg=mcfg)
-        model.save_model(os.path.join(mdir, "dev"), est, dict(meta, stage="dev", train_planes=sorted(set(g))))
+        model.save_model(os.path.join(mdir, "dev"), est, dict(meta, stage="dev", train_planes=sorted(set(g)),
+                                                              label_files=label_files(label_summary)))
         imp = model.shap_importance(est, X, feats)
         report.write_table(imp.rename("mean_abs_shap").to_frame(), os.path.join(rep, "feature_importance_dev.csv"))
         groups = dict(FEATURE_GROUPS, **({"G9_movie": MOVIE_FEATURES} if a.final_set == "full_movie" else {}))
@@ -163,15 +180,22 @@ def main():
         dep.fit(Xa, ya)
         model.save_model(os.path.join(mdir, "deploy"), dep,
                          dict(meta, stage="deploy", n_cells=len(alldata), n_accept=int(ya.sum()),
-                              train_planes=sorted(alldata["pid"].unique())))
+                              train_planes=sorted(alldata["pid"].unique()), label_files=label_files(all_summary)))
         print(f"  models -> {mdir}/{{dev,deploy}}")
 
     write_markdown(rep, a.version)
 
 
+def label_files(summary):
+    """{pid: label file name} for the metadata."""
+    return dict(zip(summary["pid"], summary["label_file"]))
+
+
 def write_markdown(rep, version):
     parts = [f"# Auto-QC classifier report {version}\n"]
     for title, fname, cols in (("Nested leave-one-plane-out CV (dev planes)", "cv_summary.csv", SUMMARY_COLS),
+                               ("Same CV, by label source (model-seeded planes are optimistic)",
+                                "cv_summary_by_source.csv", ["label_source", "n_planes"] + SUMMARY_COLS),
                                ("Leave-one-animal-out CV", "loao_summary.csv", SUMMARY_COLS),
                                ("Ablation (full model minus one group)", "ablation_summary.csv", None)):
         path = os.path.join(rep, fname)

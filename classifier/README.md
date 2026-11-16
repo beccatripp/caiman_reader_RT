@@ -79,6 +79,57 @@ grep -h -E "wrote|skipped|Failed" $OUT/logs/cmclf_apply_*.out | sort | uniq -c |
 `--include-labeled`. Run a single plane with `apply.py --version $V --plane DIR`, and add `--dry-run` to print
 the counts without writing anything.
 
+## xgboost-02: retrained on 127 planes
+
+Same procedure as `xgboost` (features, grid, kappa threshold, nested leave-one-plane-out CV, leave-one-animal-out,
+ablation, the same 6 locked test planes), trained on the planes in `training_sets/xgboost-02.csv` (the
+"Segmentation Manual Review - xgboost-02-training" sheet). Everything goes through its own config,
+`config_xgboost-02.yaml`. `config.yaml` is unchanged, so the `xgboost` model is reproduced and applied as before.
+
+- **Label sources** (the sheet's `Seg Type`): `Relaxed Params` → `results_quality.csv` (46 manual planes);
+  `xgboost` → the newest `results_quality_model_xgboost_useredits[-vNN].csv` (81 planes corrected in the reader).
+- **CV is also reported per label source** (`cv_summary_by_source.csv`). The corrected planes started from
+  xgboost's labels, so they agree with it wherever a label wasn't changed, and CV on them is optimistic. Compare
+  the two models on manual labels: the locked test (xgboost κ 0.70) and the manual planes' CV.
+- **Nothing is overwritten:** `train.py` stops if the version's model folder or a stage's summary already exists.
+
+```bash
+cd /oscar/home/rtripp/data/rtripp/caiman_reader_RT && git pull
+conda activate caiman_classifier_env
+OUT=/oscar/home/rtripp/data/rtripp/caiman_classifier_model
+C=classifier/config_xgboost-02.yaml
+V=xgboost-02
+
+# 0. Check the training planes' label files (light; reads small CSVs). Stops on missing files
+python classifier/scripts/check_training_set.py --config $C --out $OUT/lists/xgboost-02_training_check.csv
+
+# 1. Features for training planes not cached yet (cached planes are skipped)
+sbatch --array=0-126 classifier/slurm/extract_features.sbatch --config $C --training
+
+# 2. Smoke test in an interact session (one grid point, 3 inner folds, a few minutes)
+interact -n 8 -m 32g -t 1:00:00
+python classifier/scripts/train.py --config $C --version ${V}_quick --quick --stages final --n-jobs 8
+
+# 3. Full run: 121 dev planes (39 for xgboost), so one job per stage with more CPUs and time
+sbatch -c 32 --mem=64G -t 24:00:00 classifier/slurm/train.sbatch --config $C --version $V --stages cv
+sbatch -c 32 --mem=64G -t 12:00:00 classifier/slurm/train.sbatch --config $C --version $V --stages loao,final
+sbatch -c 32 --mem=64G -t 48:00:00 classifier/slurm/train.sbatch --config $C --version $V --stages ablation
+
+# 4. Locked test, once (after loao,final)
+sbatch classifier/slurm/evaluate.sbatch --config $C --version $V --locked-test
+
+# 5. Every plane not in training (includes RB07 plane0 26-03-24, which has partial manual labels)
+python classifier/scripts/make_plane_list.py --config $C --untrained --out $OUT/lists/xgboost-02_untrained.txt
+N=$(wc -l < $OUT/lists/xgboost-02_untrained.txt)
+sbatch --array=0-$(( (N + 4) / 5 - 1 ))%20 classifier/slurm/apply.sbatch --config $C --version $V \
+       --include-labeled --plane-list $OUT/lists/xgboost-02_untrained.txt
+grep -h -E "wrote|skipped|Failed" $OUT/logs/cmclf_apply_*.out | cut -d: -f2 | cut -c1-30 | sort | uniq -c
+```
+Step 5 writes `results_quality_model_xgboost-02.csv` next to any `results_quality_model_xgboost.csv` (kept).
+`--include-labeled` only lets it run on planes that already have labels. `apply.py` still never writes
+`results_quality.csv` or an edits file, and fails if anything else in the folder changed. caiman-reader
+preselects the newest model file (xgboost-02), and Save writes `results_quality_model_xgboost-02_useredits.csv`.
+
 ## What gets written where
 
 | File | Written by | Notes |
@@ -111,7 +162,8 @@ the plane folder before and after writing, and fails if anything other than the 
   RB01 26-04-09, RB05 26-03-21, RB06 26-03-24, RB07 26-03-15, RB08 26-03-05, RB09 26-03-01. `train.py` never
   loads them until the deployment refit at the very end, and never scores them.
 - Corrections of model labels go to `results_quality_model_<tag>_useredits.csv`, not `results_quality.csv`,
-  so training never picks them up by accident. Using them for training needs a deliberate code change.
+  so training never picks them up by accident. They are used only when a config's `training_set` lists the
+  plane with a model-seeded source (as `config_xgboost-02.yaml` does).
 
 ## Features (`cmclf/features.py`)
 
@@ -196,12 +248,14 @@ that pass against it). An existing group folder is never overwritten (`--run`).
 
 ```
 classifier/
-  config.yaml  environment.yml  README.md
-  cmclf/   io.py (planes, labels, HDF5)  features.py (G1-G8, replica)  movie_features.py (G9)
+  config.yaml (xgboost)  config_xgboost-02.yaml  environment.yml  README.md
+  training_sets/ xgboost-02.csv (planes and label source per plane)
+  cmclf/   io.py (planes, label files, HDF5)  features.py (G1-G8, replica)  movie_features.py (G9)
            model.py (CV, tuning, fits)   report.py (metrics, plots)    jobs.py (login guard, array task)
            registration.py (cross-session rigid + nonrigid, QC)
   scripts/ make_plane_list.py  extract_features.py  train.py  evaluate.py  apply.py  register_fov.py
+           check_training_set.py
   slurm/   extract_features.sbatch  movie_features.sbatch  train.sbatch  evaluate.sbatch  apply.sbatch
            register.sbatch
-  tests/   test_registration.py (synthetic, no data needed)
+  tests/   test_registration.py  test_training_set.py (synthetic, no data needed)
 ```

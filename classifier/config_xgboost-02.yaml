@@ -1,0 +1,70 @@
+# Auto-QC classifier for OLL CaImAn segmentation (see README.md)
+
+data_root: /oscar/home/rtripp/data/rtripp/OLL_DATA_S2026_Processed/Segmentation_caImAn_002
+output_root: /oscar/home/rtripp/data/rtripp/caiman_classifier_model
+
+random_seed: 0
+
+# xgboost-02: same procedure as xgboost (config.yaml), trained on 127 planes.
+# Use with --config classifier/config_xgboost-02.yaml for every script. config.yaml
+# stays as it was: v20261105_kappa has no tag in its metadata and takes model_tag
+# from config.yaml.
+
+# Model family tag: apply.py writes <plane>/results_quality_model_xgboost-02.csv
+model_tag: xgboost-02
+
+# Training planes: one row per plane (Mouse, Plane, Date, ..., Seg Type), the
+# "Segmentation Manual Review - xgboost-02-training" sheet. Seg Type gives the label file:
+#   Relaxed Params -> results_quality.csv (manual review)
+#   xgboost        -> newest results_quality_model_xgboost_useredits[-vNN].csv
+#                     (xgboost's labels, corrected in caiman-reader)
+# Relative to this file.
+training_set: training_sets/xgboost-02.csv
+training_set_sources:
+  Relaxed Params: manual
+  xgboost: useredits:xgboost
+
+# Locked test set: one plane0 per animal, drawn with numpy default_rng(0) before
+# any training. Never used for tuning or feature decisions; scored once by
+# scripts/evaluate.py --locked-test.
+test_planes:
+  RB01: {plane0: [26-04-09]}
+  RB05: {plane0: [26-03-21]}
+  RB06: {plane0: [26-03-24]}
+  RB07: {plane0: [26-03-15]}
+  RB08: {plane0: [26-03-05]}
+  RB09: {plane0: [26-03-01]}
+
+features:
+  mask_threshold: 0.2        # fraction of footprint peak (pipeline roi_mask_threshold)
+  baseline_percentile: 8.0   # dF/F baseline, as caiman-reader and traces_dff.npy
+  neighbor_radius_px: 75     # ~3 cell diameters
+  neighbor_corr_thresh: 0.5
+  annulus_inner_px: 2
+  annulus_outer_px: 10
+  event_z: 3.0
+  hf_cutoff_hz: 1.0
+
+movie_features:
+  chunk_frames: 200
+  shift_crop_px: 256         # central crop for frame-shift estimation
+
+model:
+  # Inner-CV grid for the tuned XGBoost models
+  grid:
+    max_depth: [3, 5]
+    min_child_weight: [1, 5]
+    scale_pos_weight: [1, balanced]   # balanced = n_reject / n_accept of the fit
+  learning_rate: 0.05
+  max_estimators: 800
+  subsample: 0.8
+  colsample_bytree: 0.8
+  inner_folds: 5
+  # Decision threshold, chosen on inner-fold predictions: kappa or balanced_accuracy.
+  # v20261105 used balanced_accuracy (threshold ~0.21, ~44% more accepts than manual).
+  threshold_objective: kappa
+
+# Pre-registered bar for the prospective blind check (scripts/evaluate.py --compare)
+prospective_pass:
+  balanced_accuracy: 0.80
+  kappa: 0.60
