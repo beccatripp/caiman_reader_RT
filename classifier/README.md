@@ -136,13 +136,13 @@ preselects the newest model file (xgboost-02), and Save writes `results_quality_
 
 ### Which labels to use in analysis
 
-`label_sources/xgboost-02.csv` lists every segmented plane (407 on 2026-11-17) with the label file to use:
+`label_sources/classifier-for-analysis-v01.csv` lists every segmented plane (407 on 2026-11-17) with the label file to use:
 `classifier` is `manual`, `xgboost-useredits`, `xgboost` (training planes, the same file training used) or
 `xgboost-02` (every other plane), and `label_file` is the file name in `plane_dir` (relative to `data_root`).
-After you correct xgboost-02 planes in the reader (or add planes), regenerate it; those planes become
+After you correct xgboost-02 planes in the reader (or add planes), write the next version; those planes become
 `xgboost-02-useredits`:
 ```bash
-python classifier/scripts/label_sources.py --config $C --out classifier/label_sources/xgboost-02.csv --force
+python classifier/scripts/label_sources.py --config $C --out classifier/label_sources/classifier-for-analysis-v02.csv
 ```
 
 ## What gets written where

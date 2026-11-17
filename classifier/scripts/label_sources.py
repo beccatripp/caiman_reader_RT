@@ -17,7 +17,7 @@ plane_dir (relative to data_root). Training planes follow io.resolve_labels, the
 same rule train.py used.
 
   python classifier/scripts/label_sources.py --config classifier/config_xgboost-02.yaml \\
-         --out classifier/label_sources/xgboost-02.csv
+         --out classifier/label_sources/classifier-for-analysis-v01.csv
 """
 import argparse
 import collections
